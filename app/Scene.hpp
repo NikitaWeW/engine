@@ -26,7 +26,10 @@ protected:
     std::unique_ptr<egn::IRenderer> mRenderer;
     egn::vk::Device mDevice;
 
+    float mRuntime = 0.0f;
+
     void updateHotkeys(egn::Registry &reg);
+    void cycleAnimations(egn::Registry &reg);
 public:
     void setup(egn::Registry &reg) override;
     void setupRenderer(egn::Registry &reg, egn::IRenderer **renderer, egn::vk::Device const &device) override;

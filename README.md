@@ -6,9 +6,9 @@ Yeah...
 
 - Is a game engine.
 - Sucks ass.
-- ECS driven.
+- ECS driven. Check out my implementation [here](https://github.com/nikitawew/nicecs).
 - Vulkan only.
-- Has too many gifs
+- Has too many gifs.
 - No generative "AI" was used.
 
 ## How to use

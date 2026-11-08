@@ -335,9 +335,9 @@ static VertexResult extractVertexData(aiMesh const *aimesh, Mesh::Geometry &mesh
 static void extractBoneData(aiMesh const *aimesh, Mesh::Geometry &mesh, Model::Skeleton &skeleton) {
     MODEL_LOADER_PROFILE;
 
-    // i hate it -- april 2025
+    // I hate it -- april 2025
     // it works -- october 2025
-    // i hate my life -- september 2026
+    // I hate my life -- september 2026
     assert(mesh.attributes.size() == mesh.positions.size());
     for(unsigned boneIndex = 0; boneIndex < aimesh->mNumBones; ++boneIndex) {
         int boneID = -1;
@@ -353,11 +353,16 @@ static void extractBoneData(aiMesh const *aimesh, Mesh::Geometry &mesh, Model::S
         }
         assert(boneID != -1);
 
+        if(bone->mNumWeights > MAX_WEIGHTS_PER_VERTEX) {
+            LOG_WARN("Bone {} is over max bones per vertex ({})", bone->mName.C_Str(), MAX_WEIGHTS_PER_VERTEX);
+            std::sort(bone->mWeights, bone->mWeights + bone->mNumWeights, [](auto const &lhs, auto const &rhs) { return lhs.mWeight < rhs.mWeight; });
+        }
+
         for(unsigned weightIndex = 0; weightIndex < bone->mNumWeights; ++weightIndex) {
             unsigned vertexID = bone->mWeights[weightIndex].mVertexId;
             assert(vertexID < mesh.positions.size());
             // record it in the first uninitialized slot
-            for(unsigned i = 0; i < 4; ++i) {
+            for(unsigned i = 0; i < MAX_WEIGHTS_PER_VERTEX; ++i) {
                 auto &attr = mesh.attributes[vertexID];
                 if(attr.boneIDs[i] == -1) {
                     attr.boneIDs[i] = boneID;
@@ -372,8 +377,15 @@ static void normalizeWeights(Mesh::Geometry &geometry) {
     MODEL_LOADER_PROFILE;
 
     for(auto &attr : geometry.attributes) {
-        if(attr.weights[0] + attr.weights[1] + attr.weights[2] + attr.weights[3] > 1e-6f)
-            attr.weights /= attr.weights[0] + attr.weights[1] + attr.weights[2] + attr.weights[3];
+        float sum = 0;
+        for(unsigned i = 0; i < MAX_WEIGHTS_PER_VERTEX; ++i) {
+            sum += attr.weights[i];
+        }
+        if(sum > 1e-6f) {
+            for(unsigned i = 0; i < MAX_WEIGHTS_PER_VERTEX; ++i) {
+                attr.weights[i] /= sum;
+            }
+        }
     }
 }
 

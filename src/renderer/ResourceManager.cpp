@@ -173,9 +173,9 @@ void ResourceAllocator::processModel(Entity eModel) {
         vulkanMesh.indexCount = mesh.geometry.indices.size();
 
         vulkanMesh.buffers = {
-            .pos = vk::makeBuffer(mAllocInfo.allocator, mesh.geometry.positions, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT),
-            .attr = vk::makeBuffer(mAllocInfo.allocator, mesh.geometry.attributes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT),
-            .idx = vk::makeBuffer(mAllocInfo.allocator, mesh.geometry.indices, VK_BUFFER_USAGE_INDEX_BUFFER_BIT),
+            .pos = vk::makeBuffer(mAllocInfo, mesh.geometry.positions, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT),
+            .attr = vk::makeBuffer(mAllocInfo, mesh.geometry.attributes, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT),
+            .idx = vk::makeBuffer(mAllocInfo, mesh.geometry.indices, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT),
         };
 
         vulkanMesh.material.textures = {
@@ -286,21 +286,21 @@ void DescriptorManager::update(uint frame) {
             for(auto const &info : write.imageInfo) {
                 if(info.resource.contains<ResourceDirty>()) {
                     dirty = true;
-                    LOG_TRACE("Resource {} is dirty!", Entity(info.resource));
+                    // LOG_TRACE("Resource {} is dirty!", Entity(info.resource));
                     break;
                 }
             }
             for(auto const &info : write.bufferInfo) {
                 if(info.resource.contains<ResourceDirty>()) {
-                    LOG_TRACE("Resource {} is dirty!", Entity(info.resource));
+                    // LOG_TRACE("Resource {} is dirty!", Entity(info.resource));
                     dirty = true;
                     break;
                 }
             }
         }
 
-        if(std::ranges::distance(ePipeline.reg().view<ResourceDirty>()))
-            LOG_TRACE("Pipeline {} dirty {}", ePipeline, dirty);
+        // if(std::ranges::distance(ePipeline.reg().view<ResourceDirty>()))
+        //     LOG_TRACE("Pipeline {} dirty {}", ePipeline, dirty);
 
         if(!dirty) {
             continue;
@@ -326,19 +326,19 @@ void DescriptorManager::update(uint frame) {
 
         writes[ePipeline].emplace_back(std::move(descWrite));
 
-        LOG_TRACE("Updating pipeline {} set {} binding {} frame {} element {} images {} buffers {}", write.dstPipeline, write.dstSet,
-            write.dstBinding, write.dstFrame, write.dstElement, write.imageInfo.size(), write.bufferInfo.size());
+        // LOG_TRACE("Updating pipeline {} set {} binding {} frame {} element {} images {} buffers {}", write.dstPipeline, write.dstSet,
+        //     write.dstBinding, write.dstFrame, write.dstElement, write.imageInfo.size(), write.bufferInfo.size());
         for(auto const &info : write.imageInfo) {
             if(info.resource.contains<ResourceDirty>()) {
                 updateCounter(info.resource);
             }
-            LOG_TRACE("  image {} {}", Entity(info.resource), string_VkImageLayout(info.layout));
+            // LOG_TRACE("  image {} {}", Entity(info.resource), string_VkImageLayout(info.layout));
         }
         for(auto const &info : write.bufferInfo) {
             if(info.resource.contains<ResourceDirty>()) {
                 updateCounter(info.resource);
             }
-            LOG_TRACE("  buffer {} offset {} size {}", Entity(info.resource), info.offset, info.size);
+            // LOG_TRACE("  buffer {} offset {} size {}", Entity(info.resource), info.offset, info.size);
         }
     }
 

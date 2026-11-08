@@ -1,4 +1,5 @@
 #include "engine/renderer/EngineRenderer.hpp"
+#include "engine/scene/Animation.hpp"
 #include "engine/scene/Camera.hpp"
 
 using namespace egn;
@@ -140,20 +141,7 @@ static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult co
         egn::vk::PipelineLayoutCreateInfo layoutCi{ .unsizedDescriptors = { { 0, 0 } } };
         egn::vk::GraphicsPipelineCreateInfo pipelineCi{
             .dynamicState = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR},
-            .input = {
-                .bindings = {
-                    {0, sizeof(glm::vec3), VK_VERTEX_INPUT_RATE_VERTEX},
-                    {1, sizeof(egn::Mesh::Geometry::Attributes), VK_VERTEX_INPUT_RATE_VERTEX},
-                },
-                .attributes = {
-                    {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0}, // pos
-                    {1, 1, VK_FORMAT_R32G32_SFLOAT,    offsetof(egn::Mesh::Geometry::Attributes, uv)},
-                    {2, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, normal)},
-                    {3, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, tangent)},
-                    {4, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, boneIDs)},
-                    {5, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, weights)},
-                },
-            },
+            .input = {},
             .attachments = {
                 //        albedo                    position                  normal                         pbr
                 .color = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM},
@@ -279,15 +267,18 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
         glm::mat4 modelMat;
         glm::mat4 normMat;
         egn::VulkanMaterial material;
-        float _pad0;
+        VkDeviceAddress boneData = 0;
     };
     struct UniformBuffer {
         glm::mat4 projMat;
         glm::mat4 viewMat;
     };
     struct PushConstants {
-        VkDeviceAddress uniformBuffer;
+        VkDeviceAddress uBuffer;
         VkDeviceAddress instanceData;
+        VkDeviceAddress indexData;
+        VkDeviceAddress posData;
+        VkDeviceAddress vertexData;
     };
 
     std::map<std::pair<egn::Entity, uint>, std::vector<ModelData>> instanceData;
@@ -316,10 +307,15 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
             auto const &mesh = model.meshes[i];
 
             modelData.modelMat = { 1.0f };
+            if(instance.eModel.contains<egn::Transform>())
+                modelData.modelMat = modelData.modelMat * instance.eModel.get<egn::Transform>().getMat();
             if(eInstance.contains<egn::Transform>())
-                modelData.modelMat = eInstance.get<egn::Transform>().getMat();
+                modelData.modelMat = modelData.modelMat * eInstance.get<egn::Transform>().getMat();
             modelData.normMat = glm::transpose(glm::inverse(glm::mat3(modelData.modelMat)));
             modelData.material = mesh.material;
+            if(eInstance.contains<CurrentAnimation>()) {
+                modelData.boneData = pushUniform(renderer.uniformBuffer, eInstance.get<CurrentAnimation>().boneMatrices, renderer.frameIndex, 16);
+            }
         }
     }
 
@@ -327,14 +323,14 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
         auto const &[eModel, index] = eMesh;
         auto const &meh = eModel.get<egn::VulkanModel>().meshes[index];
 
-        VkDeviceSize vOffset = 0;
-        vkCmdBindVertexBuffers(cb, 0, 1, &meh.buffers.pos.buffer, &vOffset);
-        vkCmdBindVertexBuffers(cb, 1, 1, &meh.buffers.attr.buffer, &vOffset);
-        vkCmdBindIndexBuffer(cb, meh.buffers.idx.buffer, 0, VK_INDEX_TYPE_UINT32);
-
         PushConstants pushConstants;
-        pushConstants.uniformBuffer = uniformBufferAddress;
+        pushConstants.uBuffer = uniformBufferAddress;
         pushConstants.instanceData = pushUniform(renderer.uniformBuffer, data, renderer.frameIndex, 16);
+        pushConstants.indexData = meh.buffers.idx.deviceAddress;
+        pushConstants.posData = meh.buffers.pos.deviceAddress;
+        pushConstants.vertexData = meh.buffers.attr.deviceAddress;
+
+        assert(pushConstants.indexData && pushConstants.posData && pushConstants.vertexData);
 
         vkCmdPushConstants(cb,
             passData.pipeline->layout.layout,
@@ -343,7 +339,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
             sizeof(pushConstants),
             &pushConstants);
 
-        vkCmdDrawIndexed(cb, meh.indexCount, data.size(), 0, 0, 0);
+        vkCmdDraw(cb, meh.indexCount, data.size(), 0, 0);
     }
 
     vkCmdEndRendering(cb);
@@ -725,7 +721,9 @@ void egn::EngineRenderer::preFrame(RestrictedEntity<vk::Image> target, uint fram
     updateResourceAllocator(*mImpl);
 
     if(std::ranges::distance(mImpl->reg->view<egn::ResourceDirty>()))
-        LOG_TRACE("{} resources are dirty! {}", std::ranges::distance(mImpl->reg->view<egn::ResourceDirty>()), mImpl->reg->view<egn::ResourceDirty>());
+        LOG_TRACE("{} resources are dirty! {}",
+            std::ranges::distance(mImpl->reg->view<egn::ResourceDirty>()),
+            mImpl->reg->view<egn::ResourceDirty>());
 
     mImpl->uniformBuffer.free(frameIndex);
 
