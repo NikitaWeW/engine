@@ -155,6 +155,7 @@ loadModelTo(egn::Registry &reg, std::string_view path, std::vector<egn::Entity> 
     return e;
 }
 inline void dumpModels(egn::Registry &reg, std::string_view dir) {
+    std::filesystem::create_directories(dir);
     std::ofstream modelStr(std::string(dir.data()) + "/models.txt");
     for(egn::RestrictedEntity<egn::Model> e : reg.view<egn::Model>()) {
         modelStr << printModelData(e) << "Geometry dumps:\n";

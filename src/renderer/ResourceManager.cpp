@@ -173,9 +173,9 @@ void ResourceAllocator::processModel(Entity eModel) {
         vulkanMesh.indexCount = mesh.geometry.indices.size();
 
         vulkanMesh.buffers = {
-            .pos = vk::makeBuffer(mAllocInfo, mesh.geometry.positions, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT),
-            .attr = vk::makeBuffer(mAllocInfo, mesh.geometry.attributes, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT),
-            .idx = vk::makeBuffer(mAllocInfo, mesh.geometry.indices, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT),
+            .pos = vk::makeBuffer(mAllocInfo, mesh.geometry.positions, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT),
+            .attr = vk::makeBuffer(mAllocInfo, mesh.geometry.attributes, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT),
+            .idx = vk::makeBuffer(mAllocInfo, mesh.geometry.indices, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT),
         };
 
         vulkanMesh.material.textures = {

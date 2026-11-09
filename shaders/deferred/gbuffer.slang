@@ -33,7 +33,7 @@ struct ModelData {
     BoneData *boneData;
 };
 
-static const uint MAX_WEIGHTS = 6;
+static const uint MAX_WEIGHTS = 4;
 struct Attributes {
     float2 uv;
     float3 normal;
@@ -42,9 +42,6 @@ struct Attributes {
     float[MAX_WEIGHTS] boneWeights;
 };
 
-struct VertexData {
-    Attributes[] data;
-};
 struct UniformBuffer {
     column_major float4x4 projMat;
     column_major float4x4 viewMat;
@@ -55,16 +52,16 @@ struct InstanceData {
 struct PushConstants {
     UniformBuffer *uBuffer;
     InstanceData *instanceData;
-    StructuredBuffer<uint32_t, ScalarDataLayout> *indexData;
-    StructuredBuffer<float3, ScalarDataLayout> *posData;
-    VertexData *vertexData;
+    uint32_t *indexData;
+    float3 *posData;
+    Attributes *vertexData;
 };
 
 struct VsOut {
     float4 clipPos : SV_Position;
     float3 viewPos;
     float2 uv;
-    float3 tangent; // idk weird slang shenanigans
+    float3 tangent;
     float3 bitangent;
     float3 normal;
     nointerpolation uint instanceID;
@@ -80,9 +77,9 @@ VsOut vsMain(uint vertexID : SV_VertexID, uint instanceID : SV_INSTANCEID, unifo
     out.normal = float3(0);
     out.tangent = float3(0);
 
-    uint index = (*pushConstants.indexData)[vertexID];
-    float3 attrPos = (*pushConstants.posData)[index];
-    Attributes attr = pushConstants.vertexData.data[index];
+    uint index = pushConstants.indexData[vertexID];
+    float3 attrPos = pushConstants.posData[index];
+    Attributes attr = pushConstants.vertexData[index];
 
     if(modelData.boneData) {
         for(int i = 0; i < 4; ++i) {

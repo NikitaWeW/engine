@@ -94,7 +94,7 @@ struct ShaderStage {
     VkShaderStageFlagBits stage;
 };
 
-static constexpr std::string_view STAGE_IDENTIFIER = "#stage";
+static constexpr std::string_view STAGE_IDENTIFIER = "#pragma stage";
 static constexpr std::string_view METADATA_FILENAME = "metadata.json";
 
 static const std::unordered_map<std::string, VkShaderStageFlagBits> gExtensionToVulkanEnum = {
@@ -339,7 +339,7 @@ static spdlog::level::level_enum spvMessageLevelToSpdlog(spv_message_level_t lev
 }
 static void runOptimizer(Shader &program, spvtools::Optimizer &optimizer) {
     for(auto &bin : program.binaries) {
-        auto messageCallback = [&program, &bin](spv_message_level_t level, char const *, spv_position_t const &position, char const *message) {
+        [[maybe_unused]] auto messageCallback = [&program, &bin](spv_message_level_t level, char const *, spv_position_t const &position, char const *message) {
             LOG(spvMessageLevelToSpdlog(level, message),
                 "Spirv optimizer at {}:{}:{} from {} -- {}",
                 bin.path,

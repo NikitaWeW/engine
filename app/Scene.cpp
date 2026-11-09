@@ -69,7 +69,7 @@ void scene::TestScene::setup(egn::Registry &reg) {
     fox.emplace<CycleAnimations>();
     fox.emplace<egn::CurrentAnimation>(fox.get<egn::ModelInstance>().eModel.get<egn::Model>().animations.front().name);
     fox.get<egn::ModelInstance>().eModel.emplace<egn::Transform>() = {
-        .scale = glm::vec3(0.14f), // Eh
+        .scale = glm::vec3(0.014f), // Eh
     };
 
     dumpModels(reg, "tmp/models");

@@ -83,7 +83,7 @@ struct Animation {
     float durationTicks = 0;
     float ticksPerSecond = 0;
 };
-constexpr std::uint32_t MAX_WEIGHTS_PER_VERTEX = 6;
+constexpr std::uint32_t MAX_WEIGHTS_PER_VERTEX = 4;
 struct Mesh {
     struct Geometry {
         struct Attributes {

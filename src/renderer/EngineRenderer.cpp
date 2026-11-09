@@ -67,13 +67,13 @@ static VkCommandPool makeCommandPool(uint32_t index, VkDevice device) {
     vkCreateCommandPool(device, &commandPoolCI, nullptr, &commandPool);
     return commandPool;
 }
-template <typename T> static uint64_t pushUniform(egn::vk::RingBuffer &uniformBuffer, T const &data, uint frame, uint alignment = 16) {
+template <typename T> static uint64_t pushUniform(vk::RingBuffer &uniformBuffer, T const &data, uint frame, uint alignment = 16) {
     uint64_t offset = uniformBuffer.request(sizeof(data), frame, alignment);
     std::memcpy(static_cast<char *>(uniformBuffer.getBuffer()->hostAddress) + offset, &data, sizeof(data));
     offset += uniformBuffer.getBuffer()->deviceAddress;
     return offset;
 }
-template <std::ranges::range T> static uint64_t pushUniform(egn::vk::RingBuffer &uniformBuffer, T const &data, uint frame, uint alignment = 16) {
+template <std::ranges::range T> static uint64_t pushUniform(vk::RingBuffer &uniformBuffer, T const &data, uint frame, uint alignment = 16) {
     uint32_t size = std::ranges::size(data) * sizeof(*std::ranges::data(data));
     uint64_t offset = uniformBuffer.request(size, frame, alignment);
     std::memcpy(static_cast<char *>(uniformBuffer.getBuffer()->hostAddress) + offset, std::ranges::data(data), size);
@@ -129,19 +129,33 @@ static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult co
     EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
     if(!passData.shader.valid()) {
         egn::Entity e = renderer.reg->create();
-        e.emplace<egn::vk::Shader>(egn::vk::makeShader({
-            .backend = egn::vk::ShaderBackend::SLANG,
-            .src = "shaders/deferred/gbuffer.slang",
-            .bin = "shaders-bin/deferred/gbuffer.slang",
+        e.emplace<vk::Shader>(vk::makeShader({
+            .backend = vk::ShaderBackend::GLSL,
+            .src = "shaders/deferred/gbuffer.glsl",
+            .bin = "shaders-bin/deferred/gbuffer.glsl",
             .device = renderer.device.device,
             .includeDirs = { "shaders" },
             .definitions = { },
             .debugInfo = true,
         }));
-        egn::vk::PipelineLayoutCreateInfo layoutCi{ .unsizedDescriptors = { { 0, 0 } } };
-        egn::vk::GraphicsPipelineCreateInfo pipelineCi{
+        assert(e.get<vk::Shader>().valid);
+        vk::PipelineLayoutCreateInfo layoutCi{ .unsizedDescriptors = { { 0, 0 } } };
+        vk::GraphicsPipelineCreateInfo pipelineCi{
             .dynamicState = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR},
-            .input = {},
+            .input = {
+                .bindings = {
+                    {0, sizeof(glm::vec3), VK_VERTEX_INPUT_RATE_VERTEX},
+                    {1, sizeof(egn::Mesh::Geometry::Attributes), VK_VERTEX_INPUT_RATE_VERTEX},
+                },
+                .attributes = {
+                    {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0}, // pos
+                    {1, 1, VK_FORMAT_R32G32_SFLOAT,    offsetof(egn::Mesh::Geometry::Attributes, uv)},
+                    {2, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, normal)},
+                    {3, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, tangent)},
+                    {4, 1, VK_FORMAT_R32G32B32_SINT,   offsetof(egn::Mesh::Geometry::Attributes, boneIDs)},
+                    {5, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, weights)},
+                },
+            },
             .attachments = {
                 //        albedo                    position                  normal                         pbr
                 .color = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM},
@@ -261,13 +275,14 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
     vkCmdSetScissor(cb, 0, 1, &scissor);
 
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
-    egn::vk::bindDescriptorSet(cb, pipeline, 0);
+    vk::bindDescriptorSet(cb, pipeline, 0);
 
     struct ModelData {
         glm::mat4 modelMat;
         glm::mat4 normMat;
         egn::VulkanMaterial material;
         VkDeviceAddress boneData = 0;
+        bool animated = false;
     };
     struct UniformBuffer {
         glm::mat4 projMat;
@@ -276,9 +291,6 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
     struct PushConstants {
         VkDeviceAddress uBuffer;
         VkDeviceAddress instanceData;
-        VkDeviceAddress indexData;
-        VkDeviceAddress posData;
-        VkDeviceAddress vertexData;
     };
 
     std::map<std::pair<egn::Entity, uint>, std::vector<ModelData>> instanceData;
@@ -315,6 +327,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
             modelData.material = mesh.material;
             if(eInstance.contains<CurrentAnimation>()) {
                 modelData.boneData = pushUniform(renderer.uniformBuffer, eInstance.get<CurrentAnimation>().boneMatrices, renderer.frameIndex, 16);
+                modelData.animated = true;
             }
         }
     }
@@ -323,14 +336,14 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
         auto const &[eModel, index] = eMesh;
         auto const &meh = eModel.get<egn::VulkanModel>().meshes[index];
 
+        VkDeviceSize vOffset = 0;
+        vkCmdBindVertexBuffers(cb, 0, 1, &meh.buffers.pos.buffer, &vOffset);
+        vkCmdBindVertexBuffers(cb, 1, 1, &meh.buffers.attr.buffer, &vOffset);
+        vkCmdBindIndexBuffer(cb, meh.buffers.idx.buffer, 0, VK_INDEX_TYPE_UINT32);
+
         PushConstants pushConstants;
         pushConstants.uBuffer = uniformBufferAddress;
         pushConstants.instanceData = pushUniform(renderer.uniformBuffer, data, renderer.frameIndex, 16);
-        pushConstants.indexData = meh.buffers.idx.deviceAddress;
-        pushConstants.posData = meh.buffers.pos.deviceAddress;
-        pushConstants.vertexData = meh.buffers.attr.deviceAddress;
-
-        assert(pushConstants.indexData && pushConstants.posData && pushConstants.vertexData);
 
         vkCmdPushConstants(cb,
             passData.pipeline->layout.layout,
@@ -339,7 +352,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
             sizeof(pushConstants),
             &pushConstants);
 
-        vkCmdDraw(cb, meh.indexCount, data.size(), 0, 0);
+        vkCmdDrawIndexed(cb, meh.indexCount, data.size(), 0, 0, 0);
     }
 
     vkCmdEndRendering(cb);
@@ -364,18 +377,18 @@ static void compileLightingPass(lighting_data &data, egn::RenderGraphResult cons
 
     if(!data.shader.valid()) {
         auto e = renderer.reg->create();
-        e.emplace<egn::vk::Shader>(egn::vk::makeShader({
-            .backend = egn::vk::ShaderBackend::SLANG,
+        e.emplace<vk::Shader>(vk::makeShader({
+            .backend = vk::ShaderBackend::SLANG,
             .src = "shaders/deferred/lighting.slang",
             .bin = "shaders-bin/deferred/lighting.slang",
             .device = renderer.device.device,
             .includeDirs = { "shaders" },
             .debugInfo = true,
         }));
-        egn::vk::PipelineLayoutCreateInfo layoutCi{
+        vk::PipelineLayoutCreateInfo layoutCi{
             .dynamicDescriptors = { { .set = 1, .binding = 0 } },
         };
-        egn::vk::GraphicsPipelineCreateInfo pipelineCi{
+        vk::GraphicsPipelineCreateInfo pipelineCi{
                     .dynamicState = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR },
                     .attachments = {
                         .color = { VK_FORMAT_R16G16B16A16_SFLOAT },
@@ -386,10 +399,10 @@ static void compileLightingPass(lighting_data &data, egn::RenderGraphResult cons
                     },
                 };
         data.shader = e;
-        e.emplace<egn::vk::Pipeline>(egn::vk::makePipeline(data.shader.get<egn::vk::Shader>(), layoutCi, pipelineCi));
+        e.emplace<vk::Pipeline>(vk::makePipeline(data.shader.get<vk::Shader>(), layoutCi, pipelineCi));
         data.pipeline = e;
         e.name("lighting_pipeline");
-        egn::vk::allocateDescriptors(data.pipeline.getc());
+        vk::allocateDescriptors(data.pipeline.getc());
 
         renderer.descManager.emplace({
             .dstPipeline = data.pipeline,
@@ -432,8 +445,8 @@ static void compileLightingPass(lighting_data &data, egn::RenderGraphResult cons
             } },
         });
     }
-    assert(data.shader.valid() && data.shader.get<egn::vk::Shader>().valid);
-    assert(data.pipeline.valid() && data.pipeline.get<egn::vk::Pipeline>().valid);
+    assert(data.shader.valid() && data.shader.get<vk::Shader>().valid);
+    assert(data.pipeline.valid() && data.pipeline.get<vk::Pipeline>().valid);
 
     data.output = res.getResource("lighting_out");
 }
@@ -483,7 +496,7 @@ static void runLightingPass(lighting_data &passData, VkCommandBuffer cb, void *p
     vkCmdSetScissor(cb, 0, 1, &scissor);
 
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
-    egn::vk::bindDescriptorSet(cb, pipeline, 0, 0);
+    vk::bindDescriptorSet(cb, pipeline, 0, 0);
 
     struct PushConstants {
         // Inverted
@@ -517,7 +530,7 @@ static void compileBlitPass(swapchain_blit_data &passData, egn::RenderGraphResul
 static void runBlitPass(swapchain_blit_data &passData, VkCommandBuffer cb, void *) {
     assert(passData.target);
     auto const &src = passData.src.get<vk::Image>();
-    auto const &dst = passData.target.get<egn::vk::Image>();
+    auto const &dst = passData.target.get<vk::Image>();
 
     VkImageBlit2 region{
         .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
@@ -545,7 +558,7 @@ static void runBlitPass(swapchain_blit_data &passData, VkCommandBuffer cb, void 
     vkCmdBlitImage2(cb, &blit);
 
     // Prepare for presentation
-    egn::vk::insertImageMemoryBarrier(cb,
+    vk::insertImageMemoryBarrier(cb,
         dst.image,
         TRANSFER_DST_TRAITS.access,
         0,
@@ -557,7 +570,7 @@ static void runBlitPass(swapchain_blit_data &passData, VkCommandBuffer cb, void 
 
 static void updateResourceAllocator(EngineRendererImpl &renderer) {
     renderer.resourceAllocator.begin();
-    for(auto eTexture : renderer.reg->view<egn::Texture2D>(egn::exclude<egn::vk::Image>{ })) {
+    for(auto eTexture : renderer.reg->view<egn::Texture2D>(egn::exclude<vk::Image>{ })) {
         renderer.resourceAllocator.processImage(eTexture);
     }
     for(auto eTexture : renderer.reg->view<egn::Model>(egn::exclude<egn::VulkanModel>{ })) {
