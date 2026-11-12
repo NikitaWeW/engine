@@ -332,12 +332,18 @@ static VertexResult extractVertexData(aiMesh const *aimesh, Mesh::Geometry &mesh
 
     return res;
 }
+// I hate it -- april 2025
+// it works -- october 2025
+// I hate my life -- september 2026
 static void extractBoneData(aiMesh const *aimesh, Mesh::Geometry &mesh, Model::Skeleton &skeleton) {
+    // FIXME: Vertex 558 in fox.glb is acting funny
+    // Make a minimal reproducer model
     MODEL_LOADER_PROFILE;
 
-    // i hate it -- april 2025
-    // it works -- october 2025
-    // i hate my life -- september 2026
+    for(auto &attr : mesh.attributes) {
+        std::memset(attr.boneIDs, -1, MAX_WEIGHTS_PER_VERTEX * sizeof(*attr.boneIDs));
+    }
+
     assert(mesh.attributes.size() == mesh.positions.size());
     for(unsigned boneIndex = 0; boneIndex < aimesh->mNumBones; ++boneIndex) {
         int boneID = -1;
@@ -354,14 +360,14 @@ static void extractBoneData(aiMesh const *aimesh, Mesh::Geometry &mesh, Model::S
         assert(boneID != -1);
 
         for(unsigned weightIndex = 0; weightIndex < bone->mNumWeights; ++weightIndex) {
-            unsigned vertexID = bone->mWeights[weightIndex].mVertexId;
-            assert(vertexID < mesh.positions.size());
+            auto const &weight = bone->mWeights[weightIndex];
+            assert(weight.mVertexId < mesh.attributes.size());
+            auto &attr = mesh.attributes[weight.mVertexId];
             // record it in the first uninitialized slot
-            for(unsigned i = 0; i < 4; ++i) {
-                auto &attr = mesh.attributes[vertexID];
+            for(unsigned i = 0; i < MAX_WEIGHTS_PER_VERTEX; ++i) {
                 if(attr.boneIDs[i] == -1) {
                     attr.boneIDs[i] = boneID;
-                    attr.weights[i] = bone->mWeights[weightIndex].mWeight;
+                    attr.weights[i] = weight.mWeight;
                     break;
                 }
             }
@@ -371,9 +377,17 @@ static void extractBoneData(aiMesh const *aimesh, Mesh::Geometry &mesh, Model::S
 static void normalizeWeights(Mesh::Geometry &geometry) {
     MODEL_LOADER_PROFILE;
 
-    for(auto &attr : geometry.attributes) {
-        if(attr.weights[0] + attr.weights[1] + attr.weights[2] + attr.weights[3] > 1e-6f)
-            attr.weights /= attr.weights[0] + attr.weights[1] + attr.weights[2] + attr.weights[3];
+    for(unsigned i = 0; i < geometry.attributes.size(); ++i) {
+        auto &attr = geometry.attributes[i];
+        float sum = 0;
+        for(unsigned i = 0; i < MAX_WEIGHTS_PER_VERTEX && attr.boneIDs[i] != -1; ++i) {
+            sum += attr.weights[i];
+        }
+        if(glm::abs(sum - 1.0f) > 1e-6) {
+            for(unsigned i = 0; i < MAX_WEIGHTS_PER_VERTEX && attr.boneIDs[i] != -1; ++i) {
+                attr.weights[i] /= sum;
+            }
+        }
     }
 }
 
@@ -820,7 +834,7 @@ static uint setFlags(ModelLoaderOptions options, Assimp::Importer &importer) {
                      aiProcess_ValidateDataStructure;
 
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
-    importer.SetPropertyInteger(AI_CONFIG_PP_LBW_MAX_WEIGHTS, 4);
+    importer.SetPropertyInteger(AI_CONFIG_PP_LBW_MAX_WEIGHTS, MAX_WEIGHTS_PER_VERTEX);
     flags |= aiProcess_LimitBoneWeights;
 
     options.smoothNormalAngle = glm::clamp(options.smoothNormalAngle, 0.0f, 175.0f);

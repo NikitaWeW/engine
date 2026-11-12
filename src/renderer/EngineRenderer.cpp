@@ -1,11 +1,17 @@
 #include "engine/renderer/EngineRenderer.hpp"
+#include "engine/scene/Animation.hpp"
 #include "engine/scene/Camera.hpp"
+
+constexpr bool ENABLE_BONE_DEBUG = false;
 
 using namespace egn;
 
 struct gbuffer_data {
     RestrictedEntity<vk::Pipeline> pipeline;
     RestrictedEntity<vk::Shader> shader;
+
+    Entity debugBonePipeline;
+    Entity debugBoneModel;
 
     Entity albedo;
     Entity position;
@@ -66,18 +72,49 @@ static VkCommandPool makeCommandPool(uint32_t index, VkDevice device) {
     vkCreateCommandPool(device, &commandPoolCI, nullptr, &commandPool);
     return commandPool;
 }
-template <typename T> static uint64_t pushUniform(egn::vk::RingBuffer &uniformBuffer, T const &data, uint frame, uint alignment = 16) {
+template <typename T> static uint64_t pushUniform(vk::RingBuffer &uniformBuffer, T const &data, uint frame, uint alignment = 16) {
     uint64_t offset = uniformBuffer.request(sizeof(data), frame, alignment);
     std::memcpy(static_cast<char *>(uniformBuffer.getBuffer()->hostAddress) + offset, &data, sizeof(data));
     offset += uniformBuffer.getBuffer()->deviceAddress;
     return offset;
 }
-template <std::ranges::range T> static uint64_t pushUniform(egn::vk::RingBuffer &uniformBuffer, T const &data, uint frame, uint alignment = 16) {
+template <std::ranges::range T> static uint64_t pushUniform(vk::RingBuffer &uniformBuffer, T const &data, uint frame, uint alignment = 16) {
     uint32_t size = std::ranges::size(data) * sizeof(*std::ranges::data(data));
     uint64_t offset = uniformBuffer.request(size, frame, alignment);
     std::memcpy(static_cast<char *>(uniformBuffer.getBuffer()->hostAddress) + offset, std::ranges::data(data), size);
     offset += uniformBuffer.getBuffer()->deviceAddress;
     return offset;
+}
+enum class ShaderType { Glsl, Slang, Auto };
+static vk::Shader makeShader(VkDevice device, std::string_view path, ShaderType type = ShaderType::Auto) {
+    if(type == ShaderType::Auto) {
+        auto ext = path.substr(path.find_last_of('.'));
+        if(ext == ".glsl") {
+            type = ShaderType::Glsl;
+        } else if(ext == ".slang") {
+            type = ShaderType::Slang;
+        } else {
+            LOG_ERROR("Could not deduce shader type for extension \"{}\" in \"{}\"", ext, path);
+            return { };
+        }
+    }
+
+    auto shader = vk::makeShader({
+        .backend = type == ShaderType::Glsl ? vk::ShaderBackend::GLSL : vk::ShaderBackend::SLANG,
+        .src = "shaders/" + std::string(path),
+        .bin = "shaders-bin/" + std::string(path),
+        .device = device,
+        .includeDirs = { "shaders" },
+        .systemIncludeDirs = { "shaders/lib" },
+        .definitions = { },
+        .debugInfo = true,
+    });
+    assert(shader.valid && "Krill issue");
+
+    return shader;
+}
+static glm::mat4 getTransform(Entity e) {
+    return e.contains<egn::Transform>() ? e.get<egn::Transform>().getMat() : glm::mat4{ 1.0f };
 }
 
 static void setupGBufferPass(egn::RenderPassBuilder &builder, void *pRenderer) {
@@ -128,17 +165,9 @@ static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult co
     EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
     if(!passData.shader.valid()) {
         egn::Entity e = renderer.reg->create();
-        e.emplace<egn::vk::Shader>(egn::vk::makeShader({
-            .backend = egn::vk::ShaderBackend::SLANG,
-            .src = "shaders/deferred/gbuffer.slang",
-            .bin = "shaders-bin/deferred/gbuffer.slang",
-            .device = renderer.device.device,
-            .includeDirs = { "shaders" },
-            .definitions = { },
-            .debugInfo = true,
-        }));
-        egn::vk::PipelineLayoutCreateInfo layoutCi{ .unsizedDescriptors = { { 0, 0 } } };
-        egn::vk::GraphicsPipelineCreateInfo pipelineCi{
+        e.emplace<vk::Shader>(makeShader(renderer.device.device, "deferred/gbuffer.glsl"));
+        vk::PipelineLayoutCreateInfo layoutCi{ .unsizedDescriptors = { { 0, 0 } } };
+        vk::GraphicsPipelineCreateInfo pipelineCi{
             .dynamicState = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR},
             .input = {
                 .bindings = {
@@ -150,8 +179,8 @@ static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult co
                     {1, 1, VK_FORMAT_R32G32_SFLOAT,    offsetof(egn::Mesh::Geometry::Attributes, uv)},
                     {2, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, normal)},
                     {3, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, tangent)},
-                    {4, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, boneIDs)},
-                    {5, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, weights)},
+                    {4, 1, VK_FORMAT_R32G32B32A32_SINT,   offsetof(egn::Mesh::Geometry::Attributes, boneIDs)},
+                    {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, weights)},
                 },
             },
             .attachments = {
@@ -177,6 +206,47 @@ static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult co
         e.name("gbuffer_pipeline");
         vk::allocateDescriptors(passData.pipeline.getc());
     }
+
+    if(ENABLE_BONE_DEBUG && !passData.debugBonePipeline.valid()) {
+        ModelLoader loader(renderer.reg->getReg());
+        passData.debugBoneModel = Entity(renderer.reg, loader.loadFromFile("assets/models/vector.glb"));
+        passData.debugBonePipeline = renderer.reg->create();
+        passData.debugBonePipeline.emplace<vk::Shader>(makeShader(renderer.device.device, "DebugBone.glsl"));
+        vk::PipelineLayoutCreateInfo layoutCi{ .unsizedDescriptors = { { 0, 0 } } };
+        vk::GraphicsPipelineCreateInfo pipelineCi{
+            .dynamicState = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR},
+            .input = {
+                .bindings = {
+                    {0, sizeof(glm::vec3), VK_VERTEX_INPUT_RATE_VERTEX},
+                    {1, sizeof(egn::Mesh::Geometry::Attributes), VK_VERTEX_INPUT_RATE_VERTEX},
+                },
+                .attributes = {
+                    {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0}, // pos
+                    {1, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(egn::Mesh::Geometry::Attributes, normal)},
+                },
+            },
+            .attachments = {
+                //        albedo                    position                  normal                         pbr
+                .color = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM},
+                .depth = renderer.depthFormat,
+            },
+            .depthStencil = {
+                .depthTestEnable = false, 
+                .depthWriteEnable = true
+            },
+            .rasterization = {
+                .cullMode = VK_CULL_MODE_BACK_BIT,
+                .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+            },
+            .blending = {
+                .attachments = { ALPHA_BLENDING },
+            }
+        };
+        passData.debugBonePipeline.emplace<vk::Pipeline>(vk::makePipeline(passData.debugBonePipeline.get<vk::Shader>(), layoutCi, pipelineCi));
+        passData.debugBonePipeline.name("gbuffer_pipeline");
+        vk::allocateDescriptors(passData.debugBonePipeline.get<vk::Pipeline>());
+    }
+
     assert(passData.shader.valid() && passData.shader->valid);
     assert(passData.pipeline.valid() && passData.pipeline->valid);
 
@@ -244,16 +314,16 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
     };
 
     VkRenderingInfo renderingInfo{
-                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .renderArea = {
-                    .offset = {0, 0},
-                    .extent = extent,
-                },
-                .layerCount = 1,
-                .colorAttachmentCount = colorAttachmentInfos.size(),
-                .pColorAttachments = colorAttachmentInfos.data(),
-                .pDepthAttachment = &depthAttachmentInfo,
-            };
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .renderArea = {
+            .offset = {0, 0},
+            .extent = extent,
+        },
+        .layerCount = 1,
+        .colorAttachmentCount = colorAttachmentInfos.size(),
+        .pColorAttachments = colorAttachmentInfos.data(),
+        .pDepthAttachment = &depthAttachmentInfo,
+    };
 
     vkCmdBeginRendering(cb, &renderingInfo);
 
@@ -273,21 +343,18 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
     vkCmdSetScissor(cb, 0, 1, &scissor);
 
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
-    egn::vk::bindDescriptorSet(cb, pipeline, 0);
+    vk::bindDescriptorSet(cb, pipeline, 0);
 
     struct ModelData {
         glm::mat4 modelMat;
         glm::mat4 normMat;
         egn::VulkanMaterial material;
-        float _pad0;
+        VkDeviceAddress boneData = 0;
+        bool animated = false;
     };
     struct UniformBuffer {
         glm::mat4 projMat;
         glm::mat4 viewMat;
-    };
-    struct PushConstants {
-        VkDeviceAddress uniformBuffer;
-        VkDeviceAddress instanceData;
     };
 
     std::map<std::pair<egn::Entity, uint>, std::vector<ModelData>> instanceData;
@@ -315,11 +382,13 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
             ModelData &modelData = instanceData[{ instance.eModel, i }].emplace_back();
             auto const &mesh = model.meshes[i];
 
-            modelData.modelMat = { 1.0f };
-            if(eInstance.contains<egn::Transform>())
-                modelData.modelMat = eInstance.get<egn::Transform>().getMat();
+            modelData.modelMat = getTransform(eInstance) * getTransform(instance.eModel);
             modelData.normMat = glm::transpose(glm::inverse(glm::mat3(modelData.modelMat)));
             modelData.material = mesh.material;
+            if(eInstance.contains<CurrentAnimation>()) {
+                modelData.boneData = pushUniform(renderer.uniformBuffer, eInstance.get<CurrentAnimation>().boneMatrices, renderer.frameIndex, 16);
+                modelData.animated = true;
+            }
         }
     }
 
@@ -332,8 +401,11 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
         vkCmdBindVertexBuffers(cb, 1, 1, &meh.buffers.attr.buffer, &vOffset);
         vkCmdBindIndexBuffer(cb, meh.buffers.idx.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-        PushConstants pushConstants;
-        pushConstants.uniformBuffer = uniformBufferAddress;
+        struct PushConstants {
+            VkDeviceAddress uBuffer;
+            VkDeviceAddress instanceData;
+        } pushConstants;
+        pushConstants.uBuffer = uniformBufferAddress;
         pushConstants.instanceData = pushUniform(renderer.uniformBuffer, data, renderer.frameIndex, 16);
 
         vkCmdPushConstants(cb,
@@ -344,6 +416,41 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
             &pushConstants);
 
         vkCmdDrawIndexed(cb, meh.indexCount, data.size(), 0, 0, 0);
+    }
+
+    if(passData.debugBonePipeline.valid()) {
+        assert(passData.debugBoneModel.valid() && passData.debugBoneModel.contains<VulkanModel>());
+        auto &meh = passData.debugBoneModel.get<VulkanModel>().meshes[0];
+
+        std::vector<glm::mat4> bones;
+        for(auto e : renderer.reg->view<ModelInstance, CurrentAnimation>()) {
+            for(auto const &bone : e.get<CurrentAnimation>().boneMatrices) {
+                bones.emplace_back(bone * getTransform(e) * getTransform(e.get<ModelInstance>().eModel) * glm::inverse(getTransform(e.get<ModelInstance>().eModel)));
+            }
+        }
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, passData.debugBonePipeline.get<vk::Pipeline>().pipeline);
+
+        struct PushConstants {
+            VkDeviceAddress boneData;
+            VkDeviceAddress uBuffer;
+        } pushConstants;
+        pushConstants.uBuffer = uniformBufferAddress;
+        pushConstants.boneData = pushUniform(renderer.uniformBuffer, bones, renderer.frameIndex, 16);
+
+        vkCmdPushConstants(cb,
+            passData.pipeline->layout.layout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0,
+            sizeof(pushConstants),
+            &pushConstants);
+
+        VkDeviceSize vOffset = 0;
+        vkCmdBindVertexBuffers(cb, 0, 1, &meh.buffers.pos.buffer, &vOffset);
+        vkCmdBindVertexBuffers(cb, 1, 1, &meh.buffers.attr.buffer, &vOffset);
+        vkCmdBindIndexBuffer(cb, meh.buffers.idx.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+        vkCmdDrawIndexed(cb, meh.indexCount, bones.size(), 0, 0, 0);
     }
 
     vkCmdEndRendering(cb);
@@ -368,18 +475,11 @@ static void compileLightingPass(lighting_data &data, egn::RenderGraphResult cons
 
     if(!data.shader.valid()) {
         auto e = renderer.reg->create();
-        e.emplace<egn::vk::Shader>(egn::vk::makeShader({
-            .backend = egn::vk::ShaderBackend::SLANG,
-            .src = "shaders/deferred/lighting.slang",
-            .bin = "shaders-bin/deferred/lighting.slang",
-            .device = renderer.device.device,
-            .includeDirs = { "shaders" },
-            .debugInfo = true,
-        }));
-        egn::vk::PipelineLayoutCreateInfo layoutCi{
+        e.emplace<vk::Shader>(makeShader(renderer.device.device, "deferred/lighting.slang"));
+        vk::PipelineLayoutCreateInfo layoutCi{
             .dynamicDescriptors = { { .set = 1, .binding = 0 } },
         };
-        egn::vk::GraphicsPipelineCreateInfo pipelineCi{
+        vk::GraphicsPipelineCreateInfo pipelineCi{
                     .dynamicState = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR },
                     .attachments = {
                         .color = { VK_FORMAT_R16G16B16A16_SFLOAT },
@@ -390,10 +490,10 @@ static void compileLightingPass(lighting_data &data, egn::RenderGraphResult cons
                     },
                 };
         data.shader = e;
-        e.emplace<egn::vk::Pipeline>(egn::vk::makePipeline(data.shader.get<egn::vk::Shader>(), layoutCi, pipelineCi));
+        e.emplace<vk::Pipeline>(vk::makePipeline(data.shader.get<vk::Shader>(), layoutCi, pipelineCi));
         data.pipeline = e;
         e.name("lighting_pipeline");
-        egn::vk::allocateDescriptors(data.pipeline.getc());
+        vk::allocateDescriptors(data.pipeline.getc());
 
         renderer.descManager.emplace({
             .dstPipeline = data.pipeline,
@@ -436,8 +536,8 @@ static void compileLightingPass(lighting_data &data, egn::RenderGraphResult cons
             } },
         });
     }
-    assert(data.shader.valid() && data.shader.get<egn::vk::Shader>().valid);
-    assert(data.pipeline.valid() && data.pipeline.get<egn::vk::Pipeline>().valid);
+    assert(data.shader.valid() && data.shader.get<vk::Shader>().valid);
+    assert(data.pipeline.valid() && data.pipeline.get<vk::Pipeline>().valid);
 
     data.output = res.getResource("lighting_out");
 }
@@ -487,7 +587,7 @@ static void runLightingPass(lighting_data &passData, VkCommandBuffer cb, void *p
     vkCmdSetScissor(cb, 0, 1, &scissor);
 
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
-    egn::vk::bindDescriptorSet(cb, pipeline, 0, 0);
+    vk::bindDescriptorSet(cb, pipeline, 0, 0);
 
     struct PushConstants {
         // Inverted
@@ -521,7 +621,7 @@ static void compileBlitPass(swapchain_blit_data &passData, egn::RenderGraphResul
 static void runBlitPass(swapchain_blit_data &passData, VkCommandBuffer cb, void *) {
     assert(passData.target);
     auto const &src = passData.src.get<vk::Image>();
-    auto const &dst = passData.target.get<egn::vk::Image>();
+    auto const &dst = passData.target.get<vk::Image>();
 
     VkImageBlit2 region{
         .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
@@ -549,7 +649,7 @@ static void runBlitPass(swapchain_blit_data &passData, VkCommandBuffer cb, void 
     vkCmdBlitImage2(cb, &blit);
 
     // Prepare for presentation
-    egn::vk::insertImageMemoryBarrier(cb,
+    vk::insertImageMemoryBarrier(cb,
         dst.image,
         TRANSFER_DST_TRAITS.access,
         0,
@@ -561,7 +661,7 @@ static void runBlitPass(swapchain_blit_data &passData, VkCommandBuffer cb, void 
 
 static void updateResourceAllocator(EngineRendererImpl &renderer) {
     renderer.resourceAllocator.begin();
-    for(auto eTexture : renderer.reg->view<egn::Texture2D>(egn::exclude<egn::vk::Image>{ })) {
+    for(auto eTexture : renderer.reg->view<egn::Texture2D>(egn::exclude<vk::Image>{ })) {
         renderer.resourceAllocator.processImage(eTexture);
     }
     for(auto eTexture : renderer.reg->view<egn::Model>(egn::exclude<egn::VulkanModel>{ })) {
@@ -725,7 +825,9 @@ void egn::EngineRenderer::preFrame(RestrictedEntity<vk::Image> target, uint fram
     updateResourceAllocator(*mImpl);
 
     if(std::ranges::distance(mImpl->reg->view<egn::ResourceDirty>()))
-        LOG_TRACE("{} resources are dirty! {}", std::ranges::distance(mImpl->reg->view<egn::ResourceDirty>()), mImpl->reg->view<egn::ResourceDirty>());
+        LOG_TRACE("{} resources are dirty! {}",
+            std::ranges::distance(mImpl->reg->view<egn::ResourceDirty>()),
+            mImpl->reg->view<egn::ResourceDirty>());
 
     mImpl->uniformBuffer.free(frameIndex);
 

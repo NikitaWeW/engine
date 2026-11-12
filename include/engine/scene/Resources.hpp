@@ -12,7 +12,9 @@ template <typename T> struct Bitmap {
     unsigned numComponents;
     glm::uvec2 size;
 
-    inline std::size_t offsetOf(glm::uvec2 pos) const { return numComponents * (pos.y * size.x + pos.x); }
+    inline std::size_t offsetOf(glm::uvec2 pos) const {
+        return numComponents * (pos.y * size.x + pos.x);
+    }
 };
 
 template <typename T> struct Texture {
@@ -81,6 +83,7 @@ struct Animation {
     float durationTicks = 0;
     float ticksPerSecond = 0;
 };
+constexpr std::uint32_t MAX_WEIGHTS_PER_VERTEX = 4;
 struct Mesh {
     struct Geometry {
         struct Attributes {
@@ -89,8 +92,8 @@ struct Mesh {
             glm::vec3 tangent;
 
             // optional
-            glm::vec4 boneIDs{ -1 };
-            glm::vec4 weights{ 0 };
+            int32_t boneIDs[MAX_WEIGHTS_PER_VERTEX]; // -1 for no id.
+            float weights[MAX_WEIGHTS_PER_VERTEX];
         };
         std::vector<glm::vec3> positions;
         std::vector<Attributes> attributes;

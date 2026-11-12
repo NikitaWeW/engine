@@ -9,6 +9,8 @@ egn::Entity Controller::createCamera(egn::RestrictedEntity<egn::Window> window, 
     auto q = glm::quat_cast(glm::lookAt(pos, target, up));
     e.emplace<Controller::Camera>() = {
         .window = window,
+    };
+    e.emplace<PositionedCamera>() = {
         .position = pos,
         // .pitchYaw = glm::vec2(glm::degrees(glm::pitch(q)), glm::degrees(glm::yaw(q)))
         .orientation = q,
@@ -29,6 +31,7 @@ static void updateOrientation(glm::vec2 offset, glm::quat &q) {
 void Controller::update(egn::Registry &reg, float dt) {
     for(egn::Entity eCamera : reg.view<Controller::Camera, egn::WindowEventListener>()) {
         auto &engineCamera = eCamera.get<egn::Camera>();
+        auto &cameraPosition = eCamera.get<PositionedCamera>();
         auto &camera = eCamera.get<Controller::Camera>();
         auto &listener = eCamera.get<egn::WindowEventListener>();
         auto &window = camera.window.get<egn::Window>();
@@ -68,9 +71,9 @@ void Controller::update(egn::Registry &reg, float dt) {
         if(velocity != glm::vec3{ 0 })
             velocity = { glm::normalize(velocity) };
         velocity *= camera.speed * (glfwGetKey(window.handle, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ? camera.boost : 1);
-        camera.position += velocity * dt;
+        cameraPosition.position += velocity * dt;
 
-        updateOrientation(arrowOffset, camera.orientation);
+        updateOrientation(arrowOffset, cameraPosition.orientation);
 
         for(; !listener.keyEvents.empty(); listener.keyEvents.pop()) {
             auto const &event = listener.keyEvents.front();
@@ -86,7 +89,7 @@ void Controller::update(egn::Registry &reg, float dt) {
             glm::vec2 offset = glm::vec2(event.delta) * camera.sensitivity;
 
             if(!camera.firstTimeMovingMouse && camera.locked)
-                updateOrientation(offset, camera.orientation);
+                updateOrientation(offset, cameraPosition.orientation);
             camera.firstTimeMovingMouse = false;
         }
 
@@ -94,15 +97,14 @@ void Controller::update(egn::Registry &reg, float dt) {
             auto const &event = listener.scrollEvents.front();
 
             if(camera.locked) {
-                camera.fov -= event.offset.y * 4;
-                camera.fov = glm::clamp<float>(camera.fov, 0.2, 90);
+                cameraPosition.fov -= event.offset.y * 4;
+                cameraPosition.fov = glm::clamp<float>(cameraPosition.fov, 0.2, 90);
             }
         }
 
-        ////////////////////////////////////////////////////////////////////////////////////////////////////
+        cameraPosition.ratio = (float) window.size.x / (float) window.size.y;
 
-        engineCamera.projMat = glm::perspective<float>(glm::radians(camera.fov), (float) window.size.x / (float) window.size.y, camera.znear, camera.zfar);
-        engineCamera.viewMat = glm::mat4_cast(glm::normalize(camera.orientation)) * glm::translate(glm::mat4(1.0f), -camera.position);
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
         // camera.viewMat =
         //     glm::rotate(glm::mat4{1.0f}, glm::radians(camera.pitchYaw.x), {1,0,0}) *
         //     glm::rotate(glm::mat4{1.0f}, glm::radians(camera.pitchYaw.y), {0,1,0}) *
@@ -110,7 +112,18 @@ void Controller::update(egn::Registry &reg, float dt) {
 
         // LOG_VAR(camera.position);
         // LOG_VAR(velocity);
-        // LOG_VAR(glm::mat4_cast(glm::normalize(camera.orientation)));
+        // LOG_VAR(glm::mat4_cast(glm::normalize(cameraPosition.orientation)));
         // LOG_VAR(camera.viewMat);
     }
 }
+
+void PositionedCamera::update(egn::Registry &reg) {
+    for(auto e : reg.view<PositionedCamera, egn::Camera>()) {
+        auto &camera = e.get<egn::Camera>();
+        auto &pos = e.get<PositionedCamera>();
+
+        camera.projMat = glm::perspective<float>(glm::radians(pos.fov), pos.ratio, pos.znear, pos.zfar);
+        camera.viewMat = glm::mat4_cast(glm::normalize(pos.orientation)) * glm::translate(glm::mat4(1.0f), -pos.position);
+    }
+}
+

@@ -441,7 +441,7 @@ int app([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
     }
     for(egn::RestrictedEntity<egn::vk::Image> e : sReg.view<egn::vk::Image>()) {
         if(e->owns) {
-            LOG_TRACE("= Destroying {} {} (valid: {} owns: {})", e, e->createInfo.name, e->valid(), e->owns);
+            // LOG_TRACE("= Destroying {} {} (valid: {} owns: {})", e, e->createInfo.name, e->valid(), e->owns);
             egn::vk::destroy(*e);
             e.erase<decltype(e)::Component<0>>();
             if(e.empty())
@@ -450,7 +450,7 @@ int app([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
     }
     for(egn::RestrictedEntity<egn::vk::Buffer> e : sReg.view<egn::vk::Buffer>()) {
         if(e->owns) {
-            LOG_TRACE("= Destroying {} {} (valid: {} owns: {})", e, e->createInfo.name, e->valid(), e->owns);
+            // LOG_TRACE("= Destroying {} {} (valid: {} owns: {})", e, e->createInfo.name, e->valid(), e->owns);
             egn::vk::destroy(*e);
             e.erase<decltype(e)::Component<0>>();
             if(e.empty())
@@ -458,14 +458,14 @@ int app([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
         }
     }
     for(egn::RestrictedEntity<egn::vk::Pipeline> e : sReg.view<egn::vk::Pipeline>()) {
-        LOG_TRACE("= Destroying {}", e);
+        // LOG_TRACE("= Destroying {}", e);
         egn::vk::destroy(*e);
         e.erase<decltype(e)::Component<0>>();
         if(e.empty())
             e.destroy();
     }
     for(egn::RestrictedEntity<egn::vk::Shader> e : sReg.view<egn::vk::Shader>()) {
-        LOG_TRACE("= Destroying {} {}", e, e->createInfo.src);
+        // LOG_TRACE("= Destroying {} {}", e, e->createInfo.src);
         egn::vk::destroy(*e);
         e.erase<decltype(e)::Component<0>>();
         if(e.empty())

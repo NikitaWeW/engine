@@ -60,22 +60,18 @@ struct Buffer {
 Buffer makeBuffer(BufferCreateInfo const &ci);
 void destroy(Buffer &buffer);
 
-template <typename T> inline Buffer makeBuffer(VmaAllocator allocator, T const &obj, VkBufferUsageFlags usage) {
+template <typename T> inline Buffer makeBuffer(AllocationCreateInfo const &allocInfo, T const &obj, VkBufferUsageFlags usage) {
     return makeBuffer(BufferCreateInfo{
         .usage = usage,
-        .allocInfo = {
-            .allocator = allocator,
-        },
+        .allocInfo = allocInfo,
         .size = sizeof(T),
         .data = &obj,
     });
 }
-template <typename T> inline Buffer makeBuffer(VmaAllocator allocator, std::vector<T> const &vec, VkBufferUsageFlags usage) {
+template <typename T> inline Buffer makeBuffer(AllocationCreateInfo const &allocInfo, std::vector<T> const &vec, VkBufferUsageFlags usage) {
     return makeBuffer(BufferCreateInfo{
         .usage = usage,
-        .allocInfo = {
-            .allocator = allocator,
-        },
+        .allocInfo = allocInfo,
         .size = static_cast<uint32_t>(vec.size() * sizeof(T)),
         .data = vec.data(),
     });
