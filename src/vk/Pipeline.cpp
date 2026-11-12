@@ -441,6 +441,10 @@ void egn::vk::allocateDescriptors(vk::Pipeline &pipeline, DescriptorAllocationIn
     auto &reflection = *static_cast<Reflection *>(pipeline._reflection);
     uint32_t numDescriptors = reflection.descSets.size();
 
+    if(numDescriptors == 0) {
+        return;
+    }
+
     if(pipeline.descriptorSets.sets.size() != 0) {
         if(ci.unsizedDescSize <= reflection.allocatedDescSize && ci.numFrames <= pipeline.descriptorSets.sets.size()) {
             return;

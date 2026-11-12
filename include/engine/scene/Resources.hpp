@@ -92,8 +92,8 @@ struct Mesh {
             glm::vec3 tangent;
 
             // optional
-            int32_t boneIDs[MAX_WEIGHTS_PER_VERTEX] = { -1 };
-            float weights[MAX_WEIGHTS_PER_VERTEX] = { 0 };
+            int32_t boneIDs[MAX_WEIGHTS_PER_VERTEX]; // -1 for no id.
+            float weights[MAX_WEIGHTS_PER_VERTEX];
         };
         std::vector<glm::vec3> positions;
         std::vector<Attributes> attributes;

@@ -16,6 +16,10 @@ static egn::Transform lookat(glm::vec3 pos, glm::vec3 center) {
     auto up = glm::abs(glm::dot(dir, { 0, 1, 0 })) > 0.999 ? glm::vec3{ 1, 0, 0 } : glm::vec3{ 0, 1, 0 };
     return { .position = pos, .orientation = glm::normalize(glm::quatLookAt(dir, up)) };
 }
+static egn::Transform lookdir(glm::vec3 pos, glm::vec3 dir) {
+    auto up = glm::abs(glm::dot(dir, { 0, 1, 0 })) > 0.999 ? glm::vec3{ 1, 0, 0 } : glm::vec3{ 0, 1, 0 };
+    return { .position = pos, .orientation = glm::normalize(glm::quatLookAt(dir, up)) };
+}
 static void assetGrid(egn::Registry &reg, std::vector<egn::Entity> const &props, glm::uvec3 dimensions, glm::vec3 offset, float distance) {
     assert(!props.empty());
     static std::random_device dev;
@@ -64,13 +68,15 @@ void scene::TestScene::setup(egn::Registry &reg) {
         reg.create(egn::ModelInstance{ cubes }, egn::Transform{ .position = { -10, 0, 10 } });
     }
 
-    auto fox = reg.create();
-    fox.emplace<egn::ModelInstance>(loadModel(reg, "assets/models/fox.glb"));
-    fox.emplace<CycleAnimations>();
-    fox.emplace<egn::CurrentAnimation>(fox.get<egn::ModelInstance>().eModel.get<egn::Model>().animations.front().name);
-    fox.get<egn::ModelInstance>().eModel.emplace<egn::Transform>() = {
-        .scale = glm::vec3(0.014f), // Eh
+    auto fox = loadModel(reg, "assets/models/fox.glb");
+    fox.emplace<egn::Transform>() = {
+        .orientation = glm::quatLookAt(glm::vec3(0, 0, 1), glm::vec3(0, 1, 0)),
+        .scale = glm::vec3(0.014f),
     };
+
+    reg.create(egn::ModelInstance(fox), CycleAnimations(), lookdir({ -9.8f, -2.4f, 12.9f }, { 0.8, 0.0f, 0.6 }));
+
+    reg.create(egn::ModelInstance(loadModel(reg, "assets/models/doohickey.glb")), CycleAnimations(), lookdir({ 8, -2, 4 }, { 0, 0, -1 }));
 
     dumpModels(reg, "tmp/models");
 
@@ -119,6 +125,16 @@ void scene::TestScene::updateHotkeys(egn::Registry &reg) {
                 e.emplace<egn::ResourceDirty>();
             }
         }
+        if(event.key == GLFW_KEY_Z && event.action == GLFW_PRESS) {
+            for(auto e : reg.view<PositionedCamera>()) {
+                auto &pos = e.get<PositionedCamera>();
+                LOG_INFO("Camera {} - position = {}, orientation = {}, forward = {}",
+                    e,
+                    fmt::streamed(pos.position),
+                    fmt::streamed(pos.orientation),
+                    fmt::streamed(glm::vec3(glm::mat4_cast(pos.orientation) * glm::vec4(0, 0, -1, 0))));
+            }
+        }
     }
 }
 void scene::TestScene::cycleAnimations(egn::Registry &reg) {
@@ -126,10 +142,13 @@ void scene::TestScene::cycleAnimations(egn::Registry &reg) {
     static std::mt19937 rng(dev());
 
     for(auto eInstance : reg.view<CycleAnimations, egn::ModelInstance>()) {
-        if(glm::mod<float>(mRuntime, 5) < 0.01 && !eInstance.contains<egn::AnimationTransition>()) {
-            auto const &model = eInstance.get<egn::ModelInstance>().eModel.getc();
+        auto const &model = eInstance.get<egn::ModelInstance>().eModel.getc();
+        if(!model.animations.empty()) {
+            eInstance.try_emplace<egn::CurrentAnimation>(model.animations.front().name);
+        }
 
-            if(model.animations.empty())
+        if(glm::mod<float>(mRuntime, 5) < 0.01 && !eInstance.contains<egn::AnimationTransition>()) {
+            if(model.animations.size() <= 1)
                 continue;
 
             std::uniform_int_distribution<> distrib(0, model.animations.size() - 1);
@@ -140,7 +159,7 @@ void scene::TestScene::cycleAnimations(egn::Registry &reg) {
             });
             float duration = 0.5 * newAnim.durationTicks / newAnim.ticksPerSecond;
 
-            LOG_INFO("Transition from {} to {} in {}s",
+            LOG_INFO("Transition from {} to {} in {:.2f}s",
                 eInstance.contains<egn::CurrentAnimation>() ? eInstance.get<egn::CurrentAnimation>().name : "unknown",
                 newAnimation,
                 duration);
@@ -159,6 +178,7 @@ void scene::TestScene::update(egn::Registry &reg, float deltatime) {
     updateHotkeys(reg);
     cycleAnimations(reg);
     mController.update(reg, deltatime);
+    PositionedCamera::update(reg);
 
     for(auto e : reg.view<egn::ModelInstance, egn::CurrentAnimation>()) {
         animate(e, deltatime);

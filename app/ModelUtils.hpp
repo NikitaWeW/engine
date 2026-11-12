@@ -186,6 +186,30 @@ inline void dumpModels(egn::Registry &reg, std::string_view dir) {
             }
             s << "\n";
         }
+
+        for(uint i = 0; i < e->meshes.size(); ++i) {
+            auto const &mesh = e->meshes[i].geometry;
+            auto path = dir.data() + ("/" + std::filesystem::path(e->path).stem().string() + "_skeleton_") + std::to_string(i) + ".txt";
+            modelStr << "  " << path << "\n";
+            std::ofstream s(path);
+            if(!s) {
+                continue;
+            }
+
+            for(unsigned i = 0; i < mesh.attributes.size(); ++i) {
+                auto &attr = mesh.attributes[i];
+                s << i << ": " << "id's { ";
+                for(unsigned j = 0; j < egn::MAX_WEIGHTS_PER_VERTEX; ++j) {
+                    s << attr.boneIDs[j] << " ";
+                }
+                s << "}, weights: { ";
+                for(unsigned j = 0; j < egn::MAX_WEIGHTS_PER_VERTEX; ++j) {
+                    s << attr.weights[j] << " ";
+                }
+                s << "}\n";
+            }
+            s << "\n";
+        }
     }
 }
 
