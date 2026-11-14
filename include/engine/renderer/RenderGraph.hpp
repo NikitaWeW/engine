@@ -40,14 +40,6 @@ struct ResourceTraits {
     }
 };
 
-/// Resize to render graph resource.
-// struct ResizeToResource {
-//     inline bool operator==(ResizeToResource const &lhs) const {
-//         return (name.empty() && lhs.name.empty()) ||
-//                (name == lhs.name && glm::abs(ratio.x - lhs.ratio.x) <= 1e-6f && glm::abs(ratio.y - lhs.ratio.y) <= 1e-6f);
-//     }
-// };
-
 // Component (for external resources)
 struct ResizeToTarget {
     glm::vec2 ratio;
@@ -70,12 +62,12 @@ struct RenderGraphExternalResourceInfo {
 // Tag component
 struct RenderGraphResource { };
 
-class RenderGraphBuilder;
 class RenderGraphResourceBuilder {
 private:
     std::unordered_map<std::string, RenderGraphExternalResourceInfo> mExternalResources;
     std::unordered_map<std::string, RenderGraphImageCreateInfo> mImageResources;
     std::unordered_map<std::string, RenderGraphBufferCreateInfo> mBufferResources;
+    std::unordered_map<std::string, std::string> mAliasResources; 
 public:
     /// @brief Yup it adds an external resource.
     /// If a resource already exists it gets overridden.
@@ -85,31 +77,36 @@ public:
     bool addExternalResource(std::string const &name, RenderGraphExternalResourceInfo info);
     bool addImageResource(std::string const &name, RenderGraphImageCreateInfo info);
     bool addBufferResource(std::string const &name, RenderGraphBufferCreateInfo info);
+    /// @brief Tells the builder that the @p name resource is actually @p target.
+    /// Can be called multiple times. The alias source will be overriden.
+    void addAliasResource(std::string const &name, std::string const &target);
 
     bool contains(std::string const &name) const;
 
-    std::unordered_map<std::string, RenderGraphExternalResourceInfo> const &getExternal() const;
-    std::unordered_map<std::string, RenderGraphImageCreateInfo> const &getImage() const;
-    std::unordered_map<std::string, RenderGraphBufferCreateInfo> const &getBuffer() const;
+    std::unordered_map<std::string, RenderGraphExternalResourceInfo> const &getExternalResources() const;
+    std::unordered_map<std::string, RenderGraphImageCreateInfo> const &getImageResources() const;
+    std::unordered_map<std::string, RenderGraphBufferCreateInfo> const &getBufferResources() const;
+    std::unordered_map<std::string, std::string> const &getAliasResources() const;
 };
 
+class RenderGraphBuilder;
 namespace _impl {
     struct RenderGraphImpl;
-    bool setupRenderGraph(::egn::RenderGraphBuilder &&, void *, RenderGraphImpl &);
+    bool setupRenderGraph(::egn::RenderGraphBuilder const &, void *, RenderGraphImpl &);
 }
+
+struct ResourceUsage {
+    std::string name;
+    ResourceTraits traits;
+};
 
 class RenderPassBuilder {
 private:
-    struct ResourceUsage {
-        std::string name;
-        ResourceTraits traits;
-    };
     std::vector<ResourceUsage> mReads;
     std::vector<ResourceUsage> mWrites;
+    std::vector<std::string> mExplicitDependencies;
 
     RenderGraphResourceBuilder *mResourceBuilder = nullptr;
-
-    friend bool ::egn::_impl::setupRenderGraph(RenderGraphBuilder &&, void *, _impl::RenderGraphImpl &);
 public:
     RenderPassBuilder(RenderGraphResourceBuilder *resourceBuilder);
     RenderGraphResourceBuilder *resource();
@@ -119,6 +116,12 @@ public:
 
     void attachResourceRead(std::string_view resourceName, ResourceTraits traits);
     void attachResourceWrite(std::string_view resourceName, ResourceTraits traits);
+    /// @brief Tells the builder that the pass must be executed only after passName.
+    void addExplicitDependency(std::string_view passName);
+
+    std::vector<ResourceUsage> const &getReads() const;
+    std::vector<ResourceUsage> const &getWrites() const;
+    std::vector<std::string> const &getExplicitDependencies() const;
 };
 
 class IRenderPassStorage {
@@ -218,10 +221,6 @@ struct Barrier {
             .size = size };
     }
 };
-struct ResourceUsage {
-    std::string name;
-    ResourceTraits traits;
-};
 struct RenderPass {
     std::string name;
     std::vector<ResourceUsage> reads;
@@ -244,8 +243,7 @@ private:
     std::optional<vk::QueueFamilies> queueFamilies;
     RenderGraphResourceBuilder mResources;
     Registry *reg = nullptr;
-    bool fresh = true;
-    friend bool ::egn::_impl::setupRenderGraph(RenderGraphBuilder &&, void * , _impl::RenderGraphImpl &);
+    friend bool ::egn::_impl::setupRenderGraph(RenderGraphBuilder const &, void * , _impl::RenderGraphImpl &);
 public:
     RenderGraphBuilder() = default;
     RenderGraphBuilder(RenderGraphBuilder const &) = delete;
@@ -270,6 +268,7 @@ public:
         std::function<RenderPassPostCompileCallback_t<Data_t>> post, std::function<RenderPassRenderCallback_t<Data_t>> render);
 
     void removePass(std::string const &name);
+    void clear();
 };
 
 struct GraphvizSettings {
@@ -293,6 +292,10 @@ public:
 
     void setResource(std::string const &name, Entity eResource);
     Entity getResource(std::string const &name) const;
+
+    // TODO: Add a way to get all resource info.
+    // Pass that info to builder optionally to reuse resources.
+    // FIXME: Actually, what happens with the old rendergraph resources as for now?
 
     RenderPass const *getPass(std::string const &name) const;
 
