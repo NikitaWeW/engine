@@ -8,6 +8,8 @@ using namespace egn::vk;
 RingBuffer::RingBuffer(Registry &reg, BufferCreateInfo createInfo) {
     mCreateInfo = createInfo;
     mBuffer = reg.create(vk::makeBuffer(createInfo));
+    if(mBuffer)
+        mBuffer.name(createInfo.name);
 }
 RingBuffer::~RingBuffer() {
     // if(mBuffer.valid()) {

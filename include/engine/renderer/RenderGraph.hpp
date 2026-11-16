@@ -4,13 +4,13 @@
 #include "engine/vk/vk.hpp"
 #include "engine/dsa/ECS.hpp"
 
-namespace egn {
+namespace egn::rg {
 
 class RenderPassBuilder;
-template <typename T> using RenderPassSetupCallback_t = void(RenderPassBuilder &, void *);
 class RenderGraphResult;
-template <typename T> using RenderPassPostCompileCallback_t = void(T &, RenderGraphResult const &, void *);
-template <typename T> using RenderPassRenderCallback_t = void(T &, VkCommandBuffer, void *);
+using RenderPassSetupCallback_t = void(RenderPassBuilder &builder, void *userData);
+template <typename T> using RenderPassPostCompileCallback_t = void(T &passData, RenderGraphResult const &result, void *userData);
+template <typename T> using RenderPassRenderCallback_t = void(T &passData, VkCommandBuffer commandBuffer, void *userData);
 
 struct ResourceTraits {
     struct {
@@ -39,6 +39,10 @@ struct ResourceTraits {
         return access != VK_ACCESS_NONE && stages != VK_PIPELINE_STAGE_NONE && (bufferTraits.valid() || imageTraits.valid());
     }
 };
+struct ResourceUsage {
+    std::string name;
+    ResourceTraits traits;
+};
 
 // Component (for external resources)
 struct ResizeToTarget {
@@ -59,8 +63,19 @@ struct RenderGraphExternalResourceInfo {
     Entity eResource;
     bool keep = false;
 };
-// Tag component
-struct RenderGraphResource { };
+// Component
+struct RenderGraphResource { 
+    // Whether the resource can be reused or do the contents have to be kept for the next frame.
+    bool keepImage = false; 
+
+    // Indices in the pass stack
+    uint lifetimeBegin = std::numeric_limits<uint>::max();
+    uint lifetimeEnd = 0;
+
+    // The name in the usage struct is the pass.
+    std::vector<ResourceUsage> read;
+    ResourceUsage written;
+};
 
 class RenderGraphResourceBuilder {
 private:
@@ -92,13 +107,9 @@ public:
 class RenderGraphBuilder;
 namespace _impl {
     struct RenderGraphImpl;
-    bool setupRenderGraph(::egn::RenderGraphBuilder const &, void *, RenderGraphImpl &);
+    bool setupRenderGraph(::egn::rg::RenderGraphBuilder const &, void *, RenderGraphImpl &);
 }
 
-struct ResourceUsage {
-    std::string name;
-    ResourceTraits traits;
-};
 
 class RenderPassBuilder {
 private:
@@ -139,12 +150,12 @@ public:
 template <typename T> class RenderPassStorage : public IRenderPassStorage {
 private:
     T mData;
-    std::function<RenderPassSetupCallback_t<T>> mSetupCallback;
+    std::function<RenderPassSetupCallback_t> mSetupCallback;
     std::function<RenderPassPostCompileCallback_t<T>> mPostCompileCallback;
     std::function<RenderPassRenderCallback_t<T>> mRenderCallback;
 public:
     RenderPassStorage() = default;
-    inline RenderPassStorage(std::function<RenderPassSetupCallback_t<T>> setupCallback,
+    inline RenderPassStorage(std::function<RenderPassSetupCallback_t> setupCallback,
         std::function<RenderPassPostCompileCallback_t<T>>
             postCompileCallback,
         std::function<RenderPassRenderCallback_t<T>>
@@ -243,7 +254,7 @@ private:
     std::optional<vk::QueueFamilies> queueFamilies;
     RenderGraphResourceBuilder mResources;
     Registry *reg = nullptr;
-    friend bool ::egn::_impl::setupRenderGraph(RenderGraphBuilder const &, void * , _impl::RenderGraphImpl &);
+    friend bool ::egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &, void * , _impl::RenderGraphImpl &);
 public:
     RenderGraphBuilder() = default;
     RenderGraphBuilder(RenderGraphBuilder const &) = delete;
@@ -264,7 +275,7 @@ public:
     void setQueueFamilies(vk::QueueFamilies const &queueFamilies);
 
     template <typename Data_t>
-    void addPass(std::string const &name, VkQueueFlagBits queue, std::function<RenderPassSetupCallback_t<Data_t>> setup,
+    void addPass(std::string const &name, VkQueueFlagBits queue, std::function<RenderPassSetupCallback_t> setup,
         std::function<RenderPassPostCompileCallback_t<Data_t>> post, std::function<RenderPassRenderCallback_t<Data_t>> render);
 
     void removePass(std::string const &name);
@@ -288,32 +299,41 @@ public:
     RenderGraphResult &operator=(RenderGraphResult &&);
     ~RenderGraphResult();
 
+    /// @brief Returns true of the render graph is valid.
     bool success() const;
 
-    void setResource(std::string const &name, Entity eResource);
+    /// @brief Set the external resource.
+    /// Must be called for external resources that had invalid entities at creation time.
+    /// Overrides the previous resource entity if called multiple times.
+    bool setResource(std::string const &name, Entity eResource);
+    /// @brief Get the entity associated with the resource.
+    /// Multiple resources may have the same entity reused.
+    /// Returns an invalid entity if the resource is not found.
     Entity getResource(std::string const &name) const;
+    /// @brief Get the names of the passes that read from the resource.
+    std::vector<ResourceUsage> const &getResourceRead(std::string const &name) const;
+    /// @brief Get the name of the pass that write to the resource, empty if no write.
+    ResourceUsage const &getResourceWrite(std::string const &name) const;
 
-    // TODO: Add a way to get all resource info.
-    // Pass that info to builder optionally to reuse resources.
-    // FIXME: Actually, what happens with the old rendergraph resources as for now?
-
+    /// @brief Get the render pass information.
     RenderPass const *getPass(std::string const &name) const;
 
     /// @brief Get the execution order of the passes
     std::vector<std::string> const &getPassStack() const;
-
-    /// @brief Generate a DOT graph.
-    /// @param indent If indent is nonnegative, then elements will be pretty-printed with that indent level.
-    /// An indent level of 0 will only insert newlines. -1 (the default) selects the most compact representation.
-    std::string dumpGraphviz(int indent = -1, GraphvizSettings settings = { }) const;
 };
 
-RenderGraphResult buildRenderGraph(RenderGraphBuilder &&builder, void *userData = nullptr);
+/// @brief Duh.
+RenderGraphResult buildRenderGraph(RenderGraphBuilder const &builder, void *userData = nullptr, RenderGraphResult *old = nullptr);
+
+/// @brief Generate a DOT graph.
+/// @param indent If indent is nonnegative, then elements will be pretty-printed with that indent level.
+/// An indent level of 0 will only insert newlines. -1 (the default) selects the most compact representation.
+std::string dumpGraphviz(RenderGraphResult const &graph, int indent = -1, GraphvizSettings settings = { });
 
 // ===================================================================================
 
 template <typename Data_t>
-inline void RenderGraphBuilder::addPass(std::string const &name, VkQueueFlagBits queue, std::function<RenderPassSetupCallback_t<Data_t>> setup,
+inline void RenderGraphBuilder::addPass(std::string const &name, VkQueueFlagBits queue, std::function<RenderPassSetupCallback_t> setup,
     std::function<RenderPassPostCompileCallback_t<Data_t>> post, std::function<RenderPassRenderCallback_t<Data_t>> render) {
     if(passes.contains(std::string(name))) {
         LOG_ERROR("Pass \"{}\" already exists!", name);

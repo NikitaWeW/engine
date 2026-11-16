@@ -1,6 +1,7 @@
 #include "engine/renderer/EngineRenderer.hpp"
 #include "engine/scene/Animation.hpp"
 #include "engine/scene/Camera.hpp"
+#include "engine/renderer/ResourceManager.hpp"
 
 constexpr bool ENABLE_BONE_DEBUG = false;
 
@@ -117,7 +118,7 @@ static glm::mat4 getTransform(Entity e) {
     return e.contains<egn::Transform>() ? e.get<egn::Transform>().getMat() : glm::mat4{ 1.0f };
 }
 
-static void setupGBufferPass(egn::RenderPassBuilder &builder, void *pRenderer) {
+static void setupGBufferPass(egn::rg::RenderPassBuilder &builder, void *pRenderer) {
     EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
     builder->addImageResource("gbuffer_albedo", {
         .imageInfo = {
@@ -161,7 +162,7 @@ static void setupGBufferPass(egn::RenderPassBuilder &builder, void *pRenderer) {
     builder.attachResourceWrite("gbuffer_pbr", egn::COLOR_ATTACHMENT_TRAITS);
     builder.attachResourceWrite("gbuffer_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS);
 }
-static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult const &res, void *pRenderer) {
+static void compileGBufferPass(gbuffer_data &passData, egn::rg::RenderGraphResult const &res, void *pRenderer) {
     EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
     if(!passData.shader.valid()) {
         egn::Entity e = renderer.reg->create();
@@ -456,7 +457,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
     vkCmdEndRendering(cb);
 }
 
-static void setupLightingPass(egn::RenderPassBuilder &builder, void *) {
+static void setupLightingPass(egn::rg::RenderPassBuilder &builder, void *) {
     builder->addImageResource("lighting_out", {
         .imageInfo = {
             .format = VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -470,7 +471,7 @@ static void setupLightingPass(egn::RenderPassBuilder &builder, void *) {
     builder.attachResourceRead("gbuffer_pbr", SHADER_READ_TRAITS);
     builder.attachResourceWrite("lighting_out", COLOR_ATTACHMENT_TRAITS);
 }
-static void compileLightingPass(lighting_data &data, egn::RenderGraphResult const &res, void *pRenderer) {
+static void compileLightingPass(lighting_data &data, egn::rg::RenderGraphResult const &res, void *pRenderer) {
     EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
 
     if(!data.shader.valid()) {
@@ -610,11 +611,11 @@ static void runLightingPass(lighting_data &passData, VkCommandBuffer cb, void *p
     vkCmdEndRendering(cb);
 }
 
-static void setupBlitPass(egn::RenderPassBuilder &builder, void *) {
+static void setupBlitPass(egn::rg::RenderPassBuilder &builder, void *) {
     builder.attachResourceRead("lighting_out", TRANSFER_SRC_TRAITS);
     builder.attachResourceWrite("target", TRANSFER_DST_TRAITS);
 }
-static void compileBlitPass(swapchain_blit_data &passData, egn::RenderGraphResult const &res, void *) {
+static void compileBlitPass(swapchain_blit_data &passData, egn::rg::RenderGraphResult const &res, void *) {
     passData.target = res.getResource("target");
     passData.src = res.getResource("lighting_out");
 }
@@ -713,7 +714,7 @@ egn::EngineRenderer::EngineRenderer(Registry &reg, vk::Device const &device) {
     mImpl->depthFormat = getDepthFormat(device.physicalDevice);
     mImpl->resourceAllocator = ResourceAllocator(ALLOCATION_INFO, mImpl->commandPool, device.queueFamilies.getQueue(VK_QUEUE_GRAPHICS_BIT));
 
-    egn::RenderGraphBuilder builder;
+    egn::rg::RenderGraphBuilder builder;
     builder.setAllocInfo(ALLOCATION_INFO, reg);
     builder.setQueueFamilies(device.queueFamilies);
     builder.resource().addExternalResource("target", { });
@@ -726,7 +727,7 @@ egn::EngineRenderer::EngineRenderer(Registry &reg, vk::Device const &device) {
     mImpl->renderGraph = this;
 
     build(std::move(builder));
-    assert(initSuccess());
+    assert(getRenderGraph().success());
 }
 egn::EngineRenderer::EngineRenderer(EngineRenderer &&o) {
     operator=(std::move(o));
@@ -748,7 +749,7 @@ void egn::EngineRenderer::setCamera(RestrictedEntity<Camera> camera) {
     mImpl->camera = camera;
 }
 
-static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity target) {
+static void resizeRenderGraph(rg::RenderGraphResult const &renderGraph, Entity target) {
     std::unordered_set<Entity> toResize;
     for(auto const &passName : renderGraph.getPassStack()) {
         auto pass = renderGraph.getPass(passName);
@@ -760,7 +761,7 @@ static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity targe
                 continue;
             }
 
-            if(entity.contains<ResizeToTarget>()) {
+            if(entity.contains<rg::ResizeToTarget>()) {
                 toResize.emplace(entity);
             }
         }
@@ -771,7 +772,7 @@ static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity targe
                 continue;
             }
 
-            if(entity.contains<ResizeToTarget>()) {
+            if(entity.contains<rg::ResizeToTarget>()) {
                 toResize.emplace(entity);
             }
         }
@@ -785,7 +786,7 @@ static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity targe
 
         if(!e.contains<vk::Image>() && e.contains<vk::ImageCreateInfo>()) {
             auto &ci = e.get<vk::ImageCreateInfo>();
-            auto const &ratio = e.get<ResizeToTarget>().ratio;
+            auto const &ratio = e.get<rg::ResizeToTarget>().ratio;
             ci.image.dimensions = dimensions;
             ci.image.dimensions.width *= ratio.x;
             ci.image.dimensions.height *= ratio.y;
@@ -805,7 +806,7 @@ static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity targe
             continue;
         }
 
-        auto const &ratio = e.get<ResizeToTarget>().ratio;
+        auto const &ratio = e.get<rg::ResizeToTarget>().ratio;
         vk::destroy(image);
         dstDimensions = dimensions;
         dstDimensions.width *= ratio.x;
@@ -835,7 +836,7 @@ void egn::EngineRenderer::preFrame(RestrictedEntity<vk::Image> target, uint fram
     mImpl->descManager.update(0 /* frameIndex */);
 
     // Clean up dirty resources that don't have any descriptors.
-    for(auto e : mImpl->reg->view<ResourceDirty>(exclude<ResourceUsage>())) {
+    for(auto e : mImpl->reg->view<ResourceDirty>(exclude<rg::ResourceUsage>())) {
         e.erase<ResourceDirty>();
     }
 }

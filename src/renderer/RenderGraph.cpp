@@ -2,8 +2,11 @@
 #include "tracy/Tracy.hpp"
 
 using namespace egn;
+using namespace egn::rg;
 
 enum class NodeState { None = 0, Visited, Added };
+
+#define ALLOW_ALIAS_ON_ALIAS
 
 struct Pass {
     std::string name;
@@ -86,7 +89,7 @@ struct ResourceInfo {
     std::vector<ResourceUsage> read;
     ResourceUsage written;
 };
-struct egn::_impl::RenderGraphImpl {
+struct egn::rg::_impl::RenderGraphImpl {
     vk::AllocationCreateInfo allocInfo;
     Registry *reg = nullptr;
     vk::QueueFamilies queueFamilies;
@@ -98,7 +101,7 @@ struct egn::_impl::RenderGraphImpl {
     std::vector<std::string> passStack;
 };
 
-struct egn::RenderGraphResultImpl {
+struct egn::rg::RenderGraphResultImpl {
     std::unordered_map<std::string, RenderPass> passes;
     std::unordered_map<std::string, ResourceInfo> resources;
     std::vector<std::string> passStack;
@@ -196,20 +199,24 @@ RenderGraphResult &RenderGraphResult::operator=(RenderGraphResult &&rhs) {
 bool RenderGraphResult::success() const {
     return mImpl;
 }
-void RenderGraphResult::setResource(std::string const &name, Entity eResource) {
-    assert(success());
+bool RenderGraphResult::setResource(std::string const &name, Entity eResource) {
+    if(!success()) {
+        return false;
+    }
 
     if(!mImpl->resources.contains(std::string(name))) {
         LOG_ERROR("Render graph does not contain resource \"{}\"", name);
-        return;
+        return false;
     }
 
     auto &res = mImpl->resources.at(std::string(name));
     if(res.ci.type != ResourceCreateInfo::External) {
         LOG_ERROR("Cannot set resource \"{}\", because it is not external!");
-        return;
+        return false;
     }
     res.eResource = eResource;
+
+    return true;
 }
 Entity RenderGraphResult::getResource(std::string const &name) const {
     assert(success());
@@ -220,6 +227,24 @@ Entity RenderGraphResult::getResource(std::string const &name) const {
     }
 
     return mImpl->resources.at(std::string(name)).eResource;
+}
+std::vector<ResourceUsage> const &RenderGraphResult::getResourceRead(std::string const &name) const {
+    assert(success());
+    if(!mImpl->resources.contains(std::string(name))) {
+        LOG_ERROR("Render graph does not contain resource \"{}\"", name);
+        assert(false); // Eh
+    }
+
+    return mImpl->resources.at(std::string(name)).read;
+}
+ResourceUsage const &RenderGraphResult::getResourceWrite(std::string const &name) const {
+    assert(success());
+    if(!mImpl->resources.contains(std::string(name))) {
+        LOG_ERROR("Render graph does not contain resource \"{}\"", name);
+        assert(false); // Eh
+    }
+
+    return mImpl->resources.at(std::string(name)).written;
 }
 RenderPass const *RenderGraphResult::getPass(std::string const &name) const {
     assert(success());
@@ -243,10 +268,10 @@ static std::string collapseAttributes(std::vector<std::string> const &attributes
         res.append("[").append(attrib).append("]");
     return res;
 }
-std::string RenderGraphResult::dumpGraphviz(int indent, GraphvizSettings settings) const {
+std::string egn::rg::dumpGraphviz(RenderGraphResult const &graph, int indent, GraphvizSettings settings) {
     ZoneScoped;
 
-    assert(success());
+    assert(graph.success());
 
     std::stringstream ss;
     auto newline = [indent](int i) { return (indent >= 0) ? ("\n" + std::string(i, ' ')) : " "; };
@@ -258,16 +283,15 @@ std::string RenderGraphResult::dumpGraphviz(int indent, GraphvizSettings setting
     std::string nodeAttributes = collapseAttributes(settings.nodeAttributes);
     std::string edgeAttributes = collapseAttributes(settings.edgeAttributes);
 
-    for(auto passName : mImpl->passStack) {
-        auto const &pass = mImpl->passes.at(passName);
+    for(auto passName : graph.getPassStack()) {
+        auto pass = graph.getPass(passName);
         passName.erase(std::remove(passName.begin(), passName.end(), '\"'), passName.end());
 
         ss << newline(indent) << "\"" << passName << "\" " << nodeAttributes << ";";
 
-        for(auto [resourceName, _] : pass.reads) {
-            auto &resource = mImpl->resources.at(resourceName);
+        for(auto [resourceName, _] : pass->reads) {
             resourceName.erase(std::remove(resourceName.begin(), resourceName.end(), '\"'), resourceName.end());
-            ss << newline(indent) << fmt::format("\"{}\" -> \"{}\" [label=\"{}\"]{}", resource.written.name, passName, resourceName, edgeAttributes);
+            ss << newline(indent) << fmt::format("\"{}\" -> \"{}\" [label=\"{}\"]{}", graph.getResourceWrite(resourceName).name, passName, resourceName, edgeAttributes);
         }
     }
 
@@ -288,7 +312,7 @@ std::string RenderGraphResult::dumpGraphviz(int indent, GraphvizSettings setting
     return ss.str();
 }
 
-bool egn::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *data, RenderGraphImpl &renderGraph) {
+bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *data, RenderGraphImpl &renderGraph) {
     ZoneScoped;
 
     if(builder.allocInfo.has_value()) {
@@ -413,30 +437,34 @@ bool egn::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *data,
             LOG_ERROR("Resource \"{}\" aliases non-existing resource \"{}\"!", name, target);
             return false;
         }
-        // "For implementation simplicity"
-        if(resourceBuilder.getAliasResources().contains(target)) {
-            LOG_ERROR("Resource \"{}\" aliases resource \"{}\", which is an alias itself!", name, target);
+
+        std::string realTarget = target;
+#if ALLOW_ALIAS_TO_ALIAS
+        std::unordered_set<std::string> visitedResources; // For loop detection
+        while(resourceBuilder.getAliasResources().contains(realTarget)) {
+            if(visitedResources.contains(realTarget)) {
+                LOG_ERROR("Alias resource \"{}\" -> \"{}\" -> \"{}\" loops!", name, target, realTarget);
+                return false;
+            }
+            realTarget = resourceBuilder.getAliasResources().at(realTarget);
+            visitedResources.emplace(realTarget);
+        }
+#else
+        if(resourceBuilder.getAliasResources().contains(realTarget)) {
+            LOG_ERROR("Resource \"{}\" aliases resource \"{}\", which is an alias itself!", name, realTarget);
             return false;
         }
+#endif
 
         auto srcResource = renderGraph.resources.at(name);
 
-        if(!srcResource.written.name.empty()) {
-            LOG_ERROR("Pass \"{}\" writes to alias resource \"{}\"! Use target resource \"{}\".", srcResource.written.name, name, target);
-            return false;
-        }
-
+#if !ALLOW_ALIAS_TO_ALIAS
         renderGraph.resources.erase(name);
-        auto &targetResource = renderGraph.resources.at(target);
+#endif
+    }
 
-        for(auto const &[passName, _] : srcResource.read) {
-            auto &pass = renderGraph.passes.at(passName);
-            std::find_if(pass.reads.begin(), pass.reads.end(), [&](auto const &usage) {
-                return usage.name == name;
-            })->name = target;
-        }
-
-        targetResource.read.append_range(srcResource.read);
+    for(auto const &[name, _] : resourceBuilder.getAliasResources()) {
+        renderGraph.resources.erase(name);
     }
 
     for(auto const &[dependent, dependency] : dependencies) {
@@ -830,7 +858,7 @@ static bool buildBarriers(_impl::RenderGraphImpl &renderGraph) {
     return true;
 }
 
-RenderGraphResult egn::buildRenderGraph(RenderGraphBuilder &&builder, void *data) {
+RenderGraphResult egn::rg::buildRenderGraph(RenderGraphBuilder const &builder, void *data) {
     ZoneScoped;
 
     _impl::RenderGraphImpl renderGraph;

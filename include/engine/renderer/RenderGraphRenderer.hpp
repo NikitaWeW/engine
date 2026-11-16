@@ -8,11 +8,11 @@ namespace egn {
 /// Render graph resource "target" is set to the render target and may not be defined.
 class RenderGraphRenderer : public IRenderer {
 private:
-    RenderGraphResult mRenderGraph;
+    rg::RenderGraphResult mRenderGraph;
     void *mData = nullptr;
 public:
     RenderGraphRenderer() = default;
-    void build(RenderGraphBuilder &&builder);
+    void build(rg::RenderGraphBuilder &&builder);
     
     void preFrame(RestrictedEntity<vk::Image> target, uint frameIndex);
     void render(CommandBuffers &commandBuffers);
@@ -23,11 +23,8 @@ public:
     inline void setResource(std::string const &name, Entity eResource) {
         mRenderGraph.setResource(name, eResource);
     }
-    inline RenderGraphResult const &getRenderGraph() const {
+    inline rg::RenderGraphResult const &getRenderGraph() const {
         return mRenderGraph;
-    }
-    inline bool initSuccess() const {
-        return getRenderGraph().success();
     }
 };
 
