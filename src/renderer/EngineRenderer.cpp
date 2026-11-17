@@ -162,7 +162,7 @@ static void setupGBufferPass(egn::rg::RenderPassBuilder &builder, void *pRendere
     builder.attachResourceWrite("gbuffer_pbr", egn::COLOR_ATTACHMENT_TRAITS);
     builder.attachResourceWrite("gbuffer_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS);
 }
-static void compileGBufferPass(gbuffer_data &passData, egn::rg::RenderGraphResult const &res, void *pRenderer) {
+static void compileGBufferPass(gbuffer_data &passData, egn::rg::RenderGraph const &res, void *pRenderer) {
     EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
     if(!passData.shader.valid()) {
         egn::Entity e = renderer.reg->create();
@@ -471,7 +471,7 @@ static void setupLightingPass(egn::rg::RenderPassBuilder &builder, void *) {
     builder.attachResourceRead("gbuffer_pbr", SHADER_READ_TRAITS);
     builder.attachResourceWrite("lighting_out", COLOR_ATTACHMENT_TRAITS);
 }
-static void compileLightingPass(lighting_data &data, egn::rg::RenderGraphResult const &res, void *pRenderer) {
+static void compileLightingPass(lighting_data &data, egn::rg::RenderGraph const &res, void *pRenderer) {
     EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
 
     if(!data.shader.valid()) {
@@ -615,7 +615,7 @@ static void setupBlitPass(egn::rg::RenderPassBuilder &builder, void *) {
     builder.attachResourceRead("lighting_out", TRANSFER_SRC_TRAITS);
     builder.attachResourceWrite("target", TRANSFER_DST_TRAITS);
 }
-static void compileBlitPass(swapchain_blit_data &passData, egn::rg::RenderGraphResult const &res, void *) {
+static void compileBlitPass(swapchain_blit_data &passData, egn::rg::RenderGraph const &res, void *) {
     passData.target = res.getResource("target");
     passData.src = res.getResource("lighting_out");
 }
@@ -714,20 +714,19 @@ egn::EngineRenderer::EngineRenderer(Registry &reg, vk::Device const &device) {
     mImpl->depthFormat = getDepthFormat(device.physicalDevice);
     mImpl->resourceAllocator = ResourceAllocator(ALLOCATION_INFO, mImpl->commandPool, device.queueFamilies.getQueue(VK_QUEUE_GRAPHICS_BIT));
 
-    egn::rg::RenderGraphBuilder builder;
-    builder.setAllocInfo(ALLOCATION_INFO, reg);
-    builder.setQueueFamilies(device.queueFamilies);
-    builder.resource().addExternalResource("target", { });
+    builder().setAllocInfo(ALLOCATION_INFO, reg);
+    builder().setQueueFamilies(device.queueFamilies);
+    builder().resource().addExternalResource("target", { });
 
-    builder.addPass<gbuffer_data>("gbuffer", VK_QUEUE_GRAPHICS_BIT, setupGBufferPass, compileGBufferPass, runGBufferPass);
-    builder.addPass<lighting_data>("lighting", VK_QUEUE_GRAPHICS_BIT, setupLightingPass, compileLightingPass, runLightingPass);
-    builder.addPass<swapchain_blit_data>("target_blit", VK_QUEUE_TRANSFER_BIT, setupBlitPass, compileBlitPass, runBlitPass);
+    builder().addPass(rg::makePass<gbuffer_data>("gbuffer", VK_QUEUE_GRAPHICS_BIT, setupGBufferPass, compileGBufferPass, runGBufferPass));
+    builder().addPass(rg::makePass<lighting_data>("lighting", VK_QUEUE_GRAPHICS_BIT, setupLightingPass, compileLightingPass, runLightingPass));
+    builder().addPass(rg::makePass<swapchain_blit_data>("target_blit", VK_QUEUE_TRANSFER_BIT, setupBlitPass, compileBlitPass, runBlitPass));
 
     setData(mImpl);
     mImpl->renderGraph = this;
 
-    build(std::move(builder));
-    assert(getRenderGraph().success());
+    RenderGraphRenderer::build();
+    assert(getRenderGraph().valid());
 }
 egn::EngineRenderer::EngineRenderer(EngineRenderer &&o) {
     operator=(std::move(o));
@@ -749,7 +748,7 @@ void egn::EngineRenderer::setCamera(RestrictedEntity<Camera> camera) {
     mImpl->camera = camera;
 }
 
-static void resizeRenderGraph(rg::RenderGraphResult const &renderGraph, Entity target) {
+static void resizeRenderGraph(rg::RenderGraph const &renderGraph, Entity target) {
     std::unordered_set<Entity> toResize;
     for(auto const &passName : renderGraph.getPassStack()) {
         auto pass = renderGraph.getPass(passName);

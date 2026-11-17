@@ -198,6 +198,8 @@ public:
 
     template <typename component_t, class... Args> component_t &try_emplace(Args &&...args);
 
+    template <typename component_t> void try_erase();
+
     /// @copydoc ecs::registry::contains
     template <typename component_t> bool contains() const;
 
@@ -510,6 +512,11 @@ template <typename component_t, class... Args> inline component_t &egn::Entity::
         return emplace<component_t>(std::forward<Args>(args)...);
     else
         return get<component_t>();
+}
+template <typename component_t> inline void egn::Entity::try_erase() {
+    assert(pReg());
+    if(contains<component_t>())
+        erase<component_t>();
 }
 template <typename component_t> inline bool egn::Entity::contains() const {
     assert(pReg());

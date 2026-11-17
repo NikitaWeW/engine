@@ -1,15 +1,14 @@
 #pragma once
 
-#include "engine/io/Logging.hpp"
 #include "engine/vk/vk.hpp"
 #include "engine/dsa/ECS.hpp"
 
 namespace egn::rg {
 
 class RenderPassBuilder;
-class RenderGraphResult;
+class RenderGraph;
 using RenderPassSetupCallback_t = void(RenderPassBuilder &builder, void *userData);
-template <typename T> using RenderPassPostCompileCallback_t = void(T &passData, RenderGraphResult const &result, void *userData);
+template <typename T> using RenderPassPostCompileCallback_t = void(T &passData, RenderGraph const &result, void *userData);
 template <typename T> using RenderPassRenderCallback_t = void(T &passData, VkCommandBuffer commandBuffer, void *userData);
 
 struct ResourceTraits {
@@ -64,30 +63,22 @@ struct RenderGraphExternalResourceInfo {
     bool keep = false;
 };
 // Component
-struct RenderGraphResource { 
-    // Whether the resource can be reused or do the contents have to be kept for the next frame.
-    bool keepImage = false; 
-
-    // Indices in the pass stack
-    uint lifetimeBegin = std::numeric_limits<uint>::max();
-    uint lifetimeEnd = 0;
-
-    // The name in the usage struct is the pass.
-    std::vector<ResourceUsage> read;
-    ResourceUsage written;
-};
+struct RenderGraphResource { };
+// Component, added to entities that were used by destroyed render graphs but themselves are not destroyed yet.
+// Adding this component to the resource allows new render graphs to use it instead of allocating new ones.
+struct RenderGraphUnusedResource { };
 
 class RenderGraphResourceBuilder {
 private:
     std::unordered_map<std::string, RenderGraphExternalResourceInfo> mExternalResources;
     std::unordered_map<std::string, RenderGraphImageCreateInfo> mImageResources;
     std::unordered_map<std::string, RenderGraphBufferCreateInfo> mBufferResources;
-    std::unordered_map<std::string, std::string> mAliasResources; 
+    std::unordered_map<std::string, std::string> mAliasResources;
 public:
     /// @brief Yup it adds an external resource.
     /// If a resource already exists it gets overridden.
     /// @param eResource Either valid entity containing vk::Image or vk::Buffer or invalid entity.
-    /// @param keep Keeps the contents of the resource from a previous frame (whether to set the barrier layout to undefined). Image only
+    /// @param keep Keeps the contents of the resource from a previous frame (whether to set the barrier layout to undefined). Image only.
     /// @returns True if the resource was added successfully.
     bool addExternalResource(std::string const &name, RenderGraphExternalResourceInfo info);
     bool addImageResource(std::string const &name, RenderGraphImageCreateInfo info);
@@ -109,7 +100,6 @@ namespace _impl {
     struct RenderGraphImpl;
     bool setupRenderGraph(::egn::rg::RenderGraphBuilder const &, void *, RenderGraphImpl &);
 }
-
 
 class RenderPassBuilder {
 private:
@@ -135,11 +125,12 @@ public:
     std::vector<std::string> const &getExplicitDependencies() const;
 };
 
+/// @brief Type erased RenderPassStorage for storing the pass data struct and the callbacks.
 class IRenderPassStorage {
 public:
     virtual ~IRenderPassStorage() = default;
     virtual void setup(RenderPassBuilder &builder, void *data = nullptr) = 0;
-    virtual void postCompile(RenderGraphResult const &res, void *data = nullptr) = 0;
+    virtual void postCompile(RenderGraph const &res, void *data = nullptr) = 0;
     virtual void render(VkCommandBuffer cb, void *data = nullptr) = 0;
 
     virtual void const *data() const = 0;
@@ -155,20 +146,23 @@ private:
     std::function<RenderPassRenderCallback_t<T>> mRenderCallback;
 public:
     RenderPassStorage() = default;
-    inline RenderPassStorage(std::function<RenderPassSetupCallback_t> setupCallback,
-        std::function<RenderPassPostCompileCallback_t<T>>
-            postCompileCallback,
-        std::function<RenderPassRenderCallback_t<T>>
-            renderCallback) {
-        mSetupCallback = setupCallback;
-        mPostCompileCallback = postCompileCallback;
-        mRenderCallback = renderCallback;
-    }
+    // clang-format off
+    template<typename... Args>
+    inline explicit RenderPassStorage(
+        std::function<RenderPassSetupCallback_t>          setupCallback,
+        std::function<RenderPassPostCompileCallback_t<T>> postCompileCallback,
+        std::function<RenderPassRenderCallback_t<T>>      renderCallback,
+        Args...                                           args
+    ):  mData(std::forward<Args>(args)...),
+        mSetupCallback(setupCallback),
+        mPostCompileCallback(postCompileCallback),
+        mRenderCallback(renderCallback) {}
+    // clang-format on
 
     inline void setup(RenderPassBuilder &builder, void *data) override {
         mSetupCallback(builder, data);
     }
-    inline void postCompile(RenderGraphResult const &res, void *data) override {
+    inline void postCompile(RenderGraph const &res, void *data) override {
         mPostCompileCallback(mData, res, data);
     }
     inline void render(VkCommandBuffer cb, void *data) override {
@@ -177,10 +171,10 @@ public:
     inline IRenderPassStorage *clone() override {
         return new RenderPassStorage<T>(*this);
     }
-    inline void const *data() const {
+    inline void const *data() const override {
         return &mData;
     }
-    inline void *data() {
+    inline void *data() override {
         return &mData;
     }
 };
@@ -234,27 +228,30 @@ struct Barrier {
 };
 struct RenderPass {
     std::string name;
+    uint index = 0; // In the pass stack
     std::vector<ResourceUsage> reads;
     std::vector<ResourceUsage> writes;
+    std::vector<std::string> explicitPassDependencies;
     std::vector<Barrier> barriers;
-    VkQueueFlagBits queue = VK_QUEUE_GRAPHICS_BIT;
-
+    VkQueueFlagBits queue;
     std::unique_ptr<IRenderPassStorage> storage;
 };
 
 class RenderGraphBuilder {
-private:
+public:
     struct Pass {
         std::string name;
         VkQueueFlagBits queue;
         std::unique_ptr<IRenderPassStorage> storage;
     };
+private:
+    std::vector<std::string> passOrder;
     std::unordered_map<std::string, Pass> passes;
     std::optional<vk::AllocationCreateInfo> allocInfo;
     std::optional<vk::QueueFamilies> queueFamilies;
     RenderGraphResourceBuilder mResources;
     Registry *reg = nullptr;
-    friend bool ::egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &, void * , _impl::RenderGraphImpl &);
+    friend bool ::egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &, void *, _impl::RenderGraphImpl &);
 public:
     RenderGraphBuilder() = default;
     RenderGraphBuilder(RenderGraphBuilder const &) = delete;
@@ -271,49 +268,61 @@ public:
     /// If not called only RenderPassBuilder::addExternalResource is allowed!
     void setAllocInfo(vk::AllocationCreateInfo const &allocInfo, Registry &reg);
 
-    /// Required for barrier placement (not optional)
+    /// @brief Required for barrier placement (not optional)
     void setQueueFamilies(vk::QueueFamilies const &queueFamilies);
 
-    template <typename Data_t>
-    void addPass(std::string const &name, VkQueueFlagBits queue, std::function<RenderPassSetupCallback_t> setup,
-        std::function<RenderPassPostCompileCallback_t<Data_t>> post, std::function<RenderPassRenderCallback_t<Data_t>> render);
+    /// makePass can be used for better syntax.
+    bool addPass(Pass &&pass);
 
-    void removePass(std::string const &name);
+    bool removePass(std::string const &name);
     void clear();
 };
 
-struct GraphvizSettings {
-    std::vector<std::string> graphAttributes = { "beautify=true", "nodesep=0.5", "ranksep=0.5", "rankdir=TB" };
-    std::vector<std::string> nodeAttributes = { };
-    std::vector<std::string> edgeAttributes = { "stype=solid", "constraint=true", "arrowhead=normal" };
+enum class ResourceType {
+    External, Image, Buffer, Alias
 };
 
-class RenderGraphResult {
+/// @brief Executable render graph.
+class RenderGraph {
 private:
-    struct RenderGraphResultImpl *mImpl = nullptr;
+    struct RenderGraphImpl *mImpl = nullptr;
 public:
-    RenderGraphResult(RenderGraphResultImpl *data = nullptr); // data could be nullptr if failed
-    RenderGraphResult(RenderGraphResult const &) = delete;
-    RenderGraphResult &operator=(RenderGraphResult const &) = delete;
-    RenderGraphResult(RenderGraphResult &&);
-    RenderGraphResult &operator=(RenderGraphResult &&);
-    ~RenderGraphResult();
+    RenderGraph(RenderGraphImpl *data = nullptr); // data could be nullptr for invalid render graphs.
+    RenderGraph(RenderGraph const &) = delete;
+    RenderGraph &operator=(RenderGraph const &) = delete;
+    RenderGraph(RenderGraph &&);
+    RenderGraph &operator=(RenderGraph &&);
+    ~RenderGraph();
 
     /// @brief Returns true of the render graph is valid.
-    bool success() const;
+    bool valid() const;
 
     /// @brief Set the external resource.
     /// Must be called for external resources that had invalid entities at creation time.
     /// Overrides the previous resource entity if called multiple times.
     bool setResource(std::string const &name, Entity eResource);
+
     /// @brief Get the entity associated with the resource.
     /// Multiple resources may have the same entity reused.
     /// Returns an invalid entity if the resource is not found.
     Entity getResource(std::string const &name) const;
+    
+    /// @throws If the render graph does not contain the resource.
+    ResourceType getResourceType(std::string const &name) const;
+
     /// @brief Get the names of the passes that read from the resource.
+    /// @throws If the render graph does not contain the resource.
     std::vector<ResourceUsage> const &getResourceRead(std::string const &name) const;
+
     /// @brief Get the name of the pass that write to the resource, empty if no write.
+    /// @throws If the render graph does not contain the resource.
     ResourceUsage const &getResourceWrite(std::string const &name) const;
+
+    /// @brief Returns all resources used by this render graph.
+    std::unordered_set<Entity> const &getAllocatedResources() const;
+
+    /// @brief Returns all resources used by this render graph.
+    std::unordered_map<std::string, Entity> const &getExternalResources() const;
 
     /// @brief Get the render pass information.
     RenderPass const *getPass(std::string const &name) const;
@@ -323,26 +332,37 @@ public:
 };
 
 /// @brief Duh.
-RenderGraphResult buildRenderGraph(RenderGraphBuilder const &builder, void *userData = nullptr, RenderGraphResult *old = nullptr);
+RenderGraph buildRenderGraph(RenderGraphBuilder const &builder, void *userData = nullptr);
+
+struct GraphvizSettings {
+    std::vector<std::string> graphAttributes = { "beautify=true", "nodesep=0.5", "ranksep=0.5", "rankdir=TB" };
+    std::vector<std::string> nodeAttributes = { };
+    std::vector<std::string> edgeAttributes = { "stype=solid", "constraint=true", "arrowhead=normal" };
+};
 
 /// @brief Generate a DOT graph.
 /// @param indent If indent is nonnegative, then elements will be pretty-printed with that indent level.
 /// An indent level of 0 will only insert newlines. -1 (the default) selects the most compact representation.
-std::string dumpGraphviz(RenderGraphResult const &graph, int indent = -1, GraphvizSettings settings = { });
+std::string dumpGraphviz(RenderGraph const &graph, int indent = -1, GraphvizSettings settings = { });
 
 // ===================================================================================
 
-template <typename Data_t>
-inline void RenderGraphBuilder::addPass(std::string const &name, VkQueueFlagBits queue, std::function<RenderPassSetupCallback_t> setup,
-    std::function<RenderPassPostCompileCallback_t<Data_t>> post, std::function<RenderPassRenderCallback_t<Data_t>> render) {
-    if(passes.contains(std::string(name))) {
-        LOG_ERROR("Pass \"{}\" already exists!", name);
-        return;
-    }
-
-    passes[std::string(name)] = Pass{ .name = std::string(name),
+// clang-format off
+template <typename Data_t, typename... Args>
+inline RenderGraphBuilder::Pass makePass(
+    std::string const &name, 
+    VkQueueFlagBits queue, 
+    std::function<RenderPassSetupCallback_t> setup,
+    std::function<RenderPassPostCompileCallback_t<Data_t>> post, 
+    std::function<RenderPassRenderCallback_t<Data_t>> render,
+    Args... args
+) {
+    return RenderGraphBuilder::Pass{ 
+        .name = std::string(name),
         .queue = queue,
-        .storage = std::unique_ptr<IRenderPassStorage>(new RenderPassStorage<Data_t>(setup, post, render)) };
+        .storage = std::unique_ptr<IRenderPassStorage>(new RenderPassStorage<Data_t>(setup, post, render, std::forward<Args>(args)...)), 
+    };
 }
+// clang-format on
 
 } // namespace egn

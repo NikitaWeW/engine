@@ -1,8 +1,13 @@
 #include "engine/renderer/RenderGraphRenderer.hpp"
 
-void egn::RenderGraphRenderer::build(rg::RenderGraphBuilder &&builder) {
-    mRenderGraph = buildRenderGraph(std::move(builder), mData);
-    if(!mRenderGraph.success()) {
+void egn::RenderGraphRenderer::build() {
+    if(mRenderGraph.valid()) {
+        for(auto e : mRenderGraph.getAllocatedResources()) {
+            e.try_emplace<rg::RenderGraphUnusedResource>();
+        }
+    }
+    mRenderGraph = rg::buildRenderGraph(mBuilder, mData);
+    if(!mRenderGraph.valid()) {
         return;
     }
     if(mRenderGraph.getResource("target")) {
@@ -25,7 +30,7 @@ void egn::RenderGraphRenderer::render(CommandBuffers &commandBuffers) {
         struct Barriers {
             std::vector<VkImageMemoryBarrier2> imageBarriers;
             std::vector<VkBufferMemoryBarrier2> bufferBarriers;
-            inline void emplace(egn::rg::Barrier const &barrier, egn::rg::RenderGraphResult const &rg) {
+            inline void emplace(egn::rg::Barrier const &barrier, egn::rg::RenderGraph const &rg) {
                 auto eResource = rg.getResource(barrier.resource);
                 if(eResource.contains<egn::vk::Image>())
                     imageBarriers.emplace_back(barrier.getImageBarrier(eResource));

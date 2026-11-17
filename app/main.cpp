@@ -325,7 +325,7 @@ int app([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
         // Resize swapchain
         if(shouldResize) {
             LOG_INFO("Resizing the swapchain and {} images to {}x{}",
-                std::ranges::distance(sReg.view<egn::ResizeToTarget>()),
+                std::ranges::distance(sReg.view<egn::rg::ResizeToTarget>()),
                 windowExtent.width,
                 windowExtent.height);
             CHECK_VK_RES(vkDeviceWaitIdle(device));

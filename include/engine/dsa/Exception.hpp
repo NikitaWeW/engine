@@ -10,7 +10,7 @@ private:
     std::string mMessage;
     cpptrace::raw_trace mTrace;
 public:
-    inline explicit EngineException(std::string_view msg) {
+    inline explicit EngineException(std::string_view msg = "") {
         mMessage = fmt::format("{}", msg);
         mTrace = cpptrace::generate_raw_trace();
     }
