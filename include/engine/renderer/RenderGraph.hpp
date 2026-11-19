@@ -15,7 +15,7 @@ struct ResourceTraits {
     struct {
         VkBufferUsageFlags2 usage = 0;
         VkDeviceSize offset = 0;
-        VkDeviceSize size = 0;
+        VkDeviceSize size = VK_WHOLE_SIZE;
 
         bool valid() const {
             return usage != 0 && size != 0;

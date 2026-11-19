@@ -6,8 +6,6 @@ using namespace egn::rg;
 
 enum class NodeState { None = 0, Visited, Added };
 
-#define ALLOW_ALIAS_ON_ALIAS
-
 struct ResourceCreateInfo {
     enum Type { Unknown, External, Image, Buffer } type = Unknown;
     union {
@@ -128,7 +126,11 @@ bool RenderGraphResourceBuilder::addBufferResource(std::string const &name, Rend
     return true;
 }
 void RenderGraphResourceBuilder::addAliasResource(std::string const &name, std::string const &src) {
-    mAliasResources[name] = src;
+    if(mAliasResources.contains(src)) {
+        addAliasResource(name, mAliasResources.at(src));
+    } else {
+        mAliasResources[name] = src;
+    }
 }
 bool RenderGraphResourceBuilder::contains(std::string const &name) const {
     return mImageResources.contains(name) || mAliasResources.contains(name) || mExternalResources.contains(name) || mBufferResources.contains(name);
@@ -223,31 +225,39 @@ bool RenderGraph::setResource(std::string const &name, Entity eResource) {
         return false;
     }
 
-    if(!mImpl->resources.contains(std::string(name))) {
-        LOG_ERROR("Render graph does not contain the resource \"{}\"", name);
+    std::string realName = name;
+    if(mImpl->aliasResources.contains(name)) {
+        realName = mImpl->aliasResources.at(name);
+    }
+    if(!mImpl->resources.contains(realName)) {
+        LOG_ERROR("Render graph does not contain the resource \"{}\"", realName);
         return false;
     }
 
-    auto &res = mImpl->resources.at(std::string(name));
+    auto &res = mImpl->resources.at(realName);
     if(res.ci.type != ResourceCreateInfo::External) {
         LOG_ERROR("Cannot set resource \"{}\", because it is not external!");
         return false;
     }
 
     res.eResource = eResource;
-    mImpl->externalResources[name] = eResource;
+    mImpl->externalResources[realName] = eResource;
 
     return true;
 }
 Entity RenderGraph::getResource(std::string const &name) const {
     assert(valid());
 
-    if(!mImpl->resources.contains(std::string(name))) {
-        LOG_ERROR("Render graph does not contain the resource \"{}\"", name);
+    std::string realName = name;
+    if(mImpl->aliasResources.contains(name)) {
+        realName = mImpl->aliasResources.at(name);
+    }
+    if(!mImpl->resources.contains(realName)) {
+        LOG_ERROR("Render graph does not contain the resource \"{}\"", realName);
         return Entity();
     }
 
-    return mImpl->resources.at(std::string(name)).eResource;
+    return mImpl->resources.at(realName).eResource;
 }
 ResourceType RenderGraph::getResourceType(std::string const &name) const {
     assert(valid());
@@ -418,6 +428,8 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
         }
     }
 
+    LOG_TRACE("Resources:");
+
     for(auto const &[name, info] : resourceBuilder.getExternalResources()) {
         LOG_TRACE("  External resource {} {}", name, info.eResource);
         if(renderGraph.resources.contains(name) && renderGraph.resources.at(name).ci.type != ResourceCreateInfo::Unknown) {
@@ -478,31 +490,40 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
             return false;
         }
 
-        std::string realTarget = target;
-#if ALLOW_ALIAS_TO_ALIAS
-        std::unordered_set<std::string> visitedResources; // For loop detection
-        while(renderGraph.aliasResources.contains(realTarget)) {
-            if(visitedResources.contains(realTarget)) {
-                LOG_ERROR("Alias resource \"{}\" -> \"{}\" -> \"{}\" loops!", name, target, realTarget);
-                return false;
-            }
-            realTarget = renderGraph.aliasResources.at(realTarget);
-            visitedResources.emplace(realTarget);
-        }
-#else
-        if(renderGraph.aliasResources.contains(realTarget)) {
-            LOG_ERROR("Resource \"{}\" aliases resource \"{}\", which is an alias itself!", name, realTarget);
+        if(renderGraph.aliasResources.contains(target)) {
+            LOG_ERROR("Resource \"{}\" aliases resource \"{}\", which is an alias itself!", name, target);
             return false;
         }
-#endif
 
-        auto srcResource = renderGraph.resources.at(name);
+        // The alias is unused.
+        if(!renderGraph.resources.contains(name)) {
+            continue;
+        }
 
-#if !ALLOW_ALIAS_TO_ALIAS
-        renderGraph.resources.erase(name);
-#endif
+        auto const &srcResource = renderGraph.resources.at(name);
+        auto &targetResource = renderGraph.resources.at(target);
+        targetResource.read.append_range(srcResource.read);
+
+        if(!srcResource.written.name.empty() && !srcResource.name.empty() && srcResource.written.name != srcResource.name) {
+            LOG_ERROR("Resource \"{}\", written by \"{}\" and its alias \"{}\", written by \"{}\" conflict!", target, targetResource.written.name, name, srcResource.written.name);
+            return false;
+        }
+
+        if(targetResource.written.name.empty()) {
+            targetResource.written.name = srcResource.written.name;
+        }
+
+        for(auto const &[passName, _] : srcResource.read) {
+            auto &pass = renderGraph.passes.at(passName);
+            auto it = std::find_if(pass.reads.begin(), pass.reads.end(), [&](auto const &e){ return e.name == name; });
+            assert(it != pass.reads.end());
+            it->name = target;
+        }
+        if(!srcResource.written.name.empty()) {
+            auto &pass = renderGraph.passes.at(srcResource.written.name);
+            std::find_if(pass.writes.begin(), pass.writes.end(), [&](auto const &e){ return e.name == name; })->name = target;
+        }
     }
-
     for(auto const &[name, _] : renderGraph.aliasResources) {
         renderGraph.resources.erase(name);
     }
@@ -934,6 +955,10 @@ RenderGraph egn::rg::buildRenderGraph(RenderGraphBuilder const &builder, void *d
         auto passName = renderGraph.passStack[i];
         auto const &pass = renderGraph.passes.at(passName);
         LOG_TRACE("{:>2}) {:>15}: {}", i, passName, printDependencies(pass));
+    }
+
+    if(renderGraph.passStack.empty()) {
+        LOG_ERROR("Pass stack empty!");
     }
 
     calculateLifetimes(renderGraph);

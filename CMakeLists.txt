@@ -24,8 +24,6 @@ set(ASSIMP_WARNINGS_AS_ERRORS OF)
 
 # set(TRACY_ENABLE ON) # From the cli
 
-CPMAddPackage("gh:nikitawew/nicecs#d47e318f1") # Mine :D
-
 CPMAddPackage(
     NAME assimp
     VERSION 6.0.2
@@ -97,6 +95,7 @@ set(ENGINE_SOURCE
     "src/io/Path.cpp"
 )
 add_library(engine ${ENGINE_SOURCE})
+add_subdirectory(nicecs)
 target_link_libraries(engine PUBLIC spdlog nicecs::ecs glm assimp meshoptimizer cpptrace::cpptrace nlohmann_json::nlohmann_json Tracy::TracyClient)
 target_link_libraries(engine PUBLIC glfw volk GPUOpen::VulkanMemoryAllocator)
 target_link_libraries(engine PUBLIC glslang::glslang glslang::glslang-default-resource-limits spirv-reflect-static SPIRV-Headers SPIRV-Tools slang::slang)

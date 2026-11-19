@@ -1,0 +1,4 @@
+[submodule "nicecs"]
+	path = nicecs
+	url = https://github.com/nikitawew/nicecs
+	branch = main

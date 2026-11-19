@@ -112,6 +112,7 @@ private:
     std::vector<DescriptorWrite> mWrites;
     std::unordered_map<Entity, uint32_t> mPipelines;
 public:
+    explicit DescriptorManager() = default;
     void emplace(DescriptorWrite write);
     void erase(Entity pipeline, vk::DescriptorBinding binding, uint frame);
     void update(uint frame = 0);

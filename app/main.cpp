@@ -116,9 +116,13 @@ class VulkanFinalizer {
 private:
     egn::Registry *mReg = nullptr;
 public:
+    VulkanFinalizer() = default;
     VulkanFinalizer(egn::Registry &reg): mReg(&reg) {
     }
     inline ~VulkanFinalizer() {
+        if(!mReg) {
+            return;
+        }
         for(egn::RestrictedEntity<egn::vk::Device> e : mReg->view<egn::vk::Device>()) {
             vmaDestroyAllocator(e->vma);
             vkDestroyDevice(e->device, nullptr);
@@ -178,7 +182,7 @@ static VkCommandPool createCommandPool(uint32_t index, VkDevice device) {
 
 ////////////////////////////////////////////////////////////////
 
-int app([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
+int app([[maybe_unused]] int argc, [[maybe_unused]] char **argv, VulkanFinalizer &vulkanFinalizer) {
     scene::IScene *scene = nullptr;
 
     if(!glfwInit()) {
@@ -193,7 +197,7 @@ int app([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
     if(!vulkanInitializer.Success()) {
         return -1;
     }
-    VulkanFinalizer vulkanFinalizer(sReg);
+    vulkanFinalizer = VulkanFinalizer(sReg);
 
     window->surface = vulkanInitializer.Surface();
 
@@ -490,6 +494,8 @@ int app([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
     return 0;
 }
 
+// I wish I could handle segfaults here too...
+// They should have made it an exception or something...
 int main(int argc, char **argv) {
     std::filesystem::create_directory("tmp/");
 
@@ -499,8 +505,9 @@ int main(int argc, char **argv) {
     strftime(buffer, 80, "%Y%m%d%H%M%S.log", now);
     initLogger("tmp/logs/main_" + std::string(buffer));
 
+    VulkanFinalizer vulkanFinalizer;
     CPPTRACE_TRY {
-        return app(argc, argv);
+        return app(argc, argv, vulkanFinalizer);
     }
     CPPTRACE_CATCH(std::exception const &e) {
         LOG_ERROR("Exception: {}\n{}", e.what(), cpptrace::from_current_exception().to_string(true));

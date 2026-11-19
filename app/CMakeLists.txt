@@ -9,6 +9,7 @@ set(APP_SOURCES
     "main.cpp"
     "Controller.cpp"
     "Scene.cpp"
+    "SceneGraphics.cpp"
 )
 
 add_executable(app ${APP_SOURCES})

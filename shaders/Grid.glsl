@@ -1,17 +1,18 @@
 #version 460
-#include "common/Extensions.glsl"
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference : require
 
-layout(set = 0, binding = 0, scalar) uniform UniformBuffer {
-    mat4 uProjMat;
-    mat4 uViewMat;
-    vec4 uColor;
-};
+layout(push_constant) uniform PushConstants {
+    mat4 projMat;
+    mat4 viewMat;
+    // vec4 color;
+} pushConstants;
 
 /////////////
-#stage vertex
+#pragma stage vertex
 /////////////
 
-out VS_OUT {
+layout(location=0) out VS_OUT {
     vec3 fragmentPosition;
     vec3 cameraPosition;
     vec2 texCoord;
@@ -32,28 +33,26 @@ const vec2 texCoords[4] = vec2[4](
 
 const float gridSize = 50;
 const float gridHeight = 0;
-const float EPSILON = 1e-3;
 const float gridTiling = 0.1;
 
 void main() {
-    vec3 cameraPosition = inverse(uViewMat)[3].xyz;
+    vec3 cameraPosition = inverse(pushConstants.viewMat)[3].xyz;
     vec3 vertexPosition = vertices[gl_VertexIndex] * gridSize;
     vertexPosition += floor(cameraPosition * gridTiling) / gridTiling;
     vertexPosition.y = gridHeight;
     vs_out.fragmentPosition = vertexPosition;
     vs_out.cameraPosition = cameraPosition;
     vs_out.texCoord = texCoords[gl_VertexIndex];
-    gl_Position = uProjMat * uViewMat * vec4(vs_out.fragmentPosition, 1);
+    gl_Position = pushConstants.projMat * pushConstants.viewMat * vec4(vs_out.fragmentPosition, 1);
 }
 
 ///////////////
-#stage fragment
+#pragma stage fragment
 ///////////////
-out vec4 oColor;
+layout(location=0) out vec4 oColor;
 
-uniform vec4 u_color = vec4(0.7);
 
-in VS_OUT {
+layout(location=0) in VS_OUT {
     vec3 fragmentPosition;
     vec3 cameraPosition;
     vec2 texCoord;
@@ -64,10 +63,11 @@ const float gridTiling = 100;
 const float uvTiling = 1;
 
 #include <grid.glsl>
+#include <hex.glsl>
 
 void main() {
-    oColor = u_color;
+    oColor = hex4(0xFFFFFFFF);
 
     float falloff = smoothstep(1.0, 0.0, length(fs_in.fragmentPosition - fs_in.cameraPosition) / maxFadeDistance); // fade the grid
-    oColor.a = (grid(0.01, uvTiling * 10 * fs_in.texCoord) + grid(0.003, uvTiling * 1 * fs_in.texCoord)) * falloff;
+    oColor.a = (grid(0.01, uvTiling * 10 * fs_in.texCoord, gridTiling) + grid(0.003, uvTiling * 1 * fs_in.texCoord, gridTiling)) * falloff;
 }

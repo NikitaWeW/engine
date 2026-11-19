@@ -23,6 +23,7 @@ void egn::RenderGraphRenderer::preFrame(RestrictedEntity<vk::Image> target, uint
     }
 }
 void egn::RenderGraphRenderer::render(CommandBuffers &commandBuffers) {
+    assert(getRenderGraph().valid() && "Forgot to build?");
     for(auto passIndex : mRenderGraph.getPassStack()) {
         auto const &pass = mRenderGraph.getPass(passIndex);
         assert(pass);

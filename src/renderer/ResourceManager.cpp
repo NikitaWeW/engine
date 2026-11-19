@@ -130,7 +130,7 @@ uint32_t ResourceAllocator::processImage(Entity eImage) {
             .name = image.path
         };
         eImage.emplace<vk::Image>(vk::makeImage(ci));
-        eImage.emplace<ImageIndex>(mProcessedImages.size());
+        eImage.emplace<ImageIndex>(static_cast<uint32_t>(mProcessedImages.size()));
         eImage.name(ci.name);
         mProcessedImages.emplace_back(eImage);
 

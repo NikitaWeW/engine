@@ -39,10 +39,15 @@ static void assetGrid(egn::Registry &reg, std::vector<egn::Entity> const &props,
 }
 
 void scene::TestScene::setupRenderer(egn::Registry &reg, egn::IRenderer **renderer, egn::vk::Device const &device) {
-    mRenderer = std::unique_ptr<egn::IRenderer>(new egn::EngineRenderer(reg, device));
-    static_cast<egn::EngineRenderer *>(mRenderer.get())->setCamera(mCamera);
-    *renderer = mRenderer.get();
     mDevice = device;
+    mRenderer = std::make_unique<egn::EngineRenderer>(reg, mDevice);
+    mRenderer->setCamera(mCamera);
+
+    addCustomGraphics();
+
+    mRenderer->build();
+    assert(mRenderer->getRenderGraph().valid());
+    *renderer = mRenderer.get();
 }
 void scene::TestScene::setup(egn::Registry &reg) {
     const auto prototypeTextures = egn::Material::Textures{ .albedo = loadTexture(reg, "assets/textures/prototype/texture_03.png", false) };
