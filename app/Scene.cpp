@@ -79,11 +79,19 @@ void scene::TestScene::setup(egn::Registry &reg) {
         .scale = glm::vec3(0.014f),
     };
 
+    egn::Entity e1 = reg.create();
+    egn::Entity e2 = e1;
+
+    e2.emplace<egn::Transform>();
+    e1.contains<egn::Transform>(); // true
+
     reg.create(egn::ModelInstance(fox), CycleAnimations(), lookdir({ -9.8f, -2.4f, 12.9f }, { 0.8, 0.0f, 0.6 }));
 
     reg.create(egn::ModelInstance(loadModel(reg, "assets/models/doohickey.glb")), CycleAnimations(), lookdir({ 8, -2, 4 }, { 0, 0, -1 }));
 
     dumpModels(reg, "tmp/models");
+
+    reg.view<egn::vk::Shader>(); 
 
     assert(reg.view<MainWindow>().smallSize() == 1);
     auto window = *reg.view<MainWindow>().begin();

@@ -6,3 +6,4 @@ install
 .cache
 CMakeUserPresets.json
 RenderGraph.dot
+RenderGraph

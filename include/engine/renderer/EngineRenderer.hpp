@@ -149,6 +149,7 @@ rg::ResourceTraits constexpr TRANSFER_DST_TRAITS{
     .access = VK_ACCESS_2_TRANSFER_WRITE_BIT,
     .stages = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
 };
+rg::ResourceTraits constexpr NO_BARRIER_TRAITS{ };
 rg::RenderGraphImageCreateInfo constexpr MAIN_IMAGE_INFO{
     .imageInfo = {
         .format = VK_FORMAT_R16G16B16A16_SFLOAT,

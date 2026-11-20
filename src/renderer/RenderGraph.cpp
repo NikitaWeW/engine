@@ -1,6 +1,16 @@
 #include "engine/renderer/RenderGraph.hpp"
 #include "tracy/Tracy.hpp"
 
+#ifndef RENDER_GRAPH_LOG
+#define RENDER_GRAPH_LOG 1
+#endif
+
+#if RENDER_GRAPH_LOG
+#define RG_LOG_TRACE LOG_TRACE
+#else
+#define RG_LOG_TRACE(...)
+#endif
+
 using namespace egn;
 using namespace egn::rg;
 
@@ -75,8 +85,10 @@ struct ResourceInfo {
     uint lifetimeBegin = std::numeric_limits<uint>::max();
     uint lifetimeEnd = 0;
 
-    std::vector<ResourceUsage> read;
-    ResourceUsage written;
+    std::vector<ResourceReadUsage> read;
+    std::vector<ResourceUsage> written; // In chronological order.
+
+    std::string lastPassWrite;
 };
 struct egn::rg::_impl::RenderGraphImpl {
     vk::AllocationCreateInfo allocInfo;
@@ -155,17 +167,17 @@ RenderPassBuilder::RenderPassBuilder(RenderGraphResourceBuilder *resourceBuilder
 RenderGraphResourceBuilder *RenderPassBuilder::resource() {
     return mResourceBuilder;
 }
-void RenderPassBuilder::attachResourceRead(std::string_view resourceName, ResourceTraits traits) {
-    mReads.emplace_back(std::string(resourceName), traits);
+void RenderPassBuilder::attachResourceRead(ResourceReadUsage const &resource) {
+    mReads.emplace_back(resource);
 }
-void RenderPassBuilder::attachResourceWrite(std::string_view resourceName, ResourceTraits traits) {
-    mWrites.emplace_back(std::string(resourceName), traits);
+void RenderPassBuilder::attachResourceWrite(ResourceUsage const &resource) {
+    mWrites.emplace_back(resource);
 }
 void RenderPassBuilder::addExplicitDependency(std::string_view passName) {
     mExplicitDependencies.emplace_back(passName);
 }
 
-std::vector<ResourceUsage> const &RenderPassBuilder::getReads() const {
+std::vector<ResourceReadUsage> const &RenderPassBuilder::getReads() const {
     return mReads;
 }
 std::vector<ResourceUsage> const &RenderPassBuilder::getWrites() const {
@@ -278,7 +290,7 @@ ResourceType RenderGraph::getResourceType(std::string const &name) const {
         default: assert(false && "what"); break;
     }
 }
-std::vector<ResourceUsage> const &RenderGraph::getResourceRead(std::string const &name) const {
+std::vector<ResourceReadUsage> const &RenderGraph::getResourceRead(std::string const &name) const {
     assert(valid());
     if(!mImpl->resources.contains(std::string(name))) {
         LOG_ERROR("Render graph does not contain the resource \"{}\"", name);
@@ -295,7 +307,7 @@ std::unordered_map<std::string, Entity> const &RenderGraph::getExternalResources
     assert(valid());
     return mImpl->externalResources;
 }
-ResourceUsage const &RenderGraph::getResourceWrite(std::string const &name) const {
+std::vector<ResourceUsage> const &RenderGraph::getResourceWrite(std::string const &name) const {
     assert(valid());
     if(!mImpl->resources.contains(std::string(name))) {
         LOG_ERROR("Render graph does not contain the resource \"{}\"", name);
@@ -347,10 +359,11 @@ std::string egn::rg::dumpGraphviz(RenderGraph const &graph, int indent, Graphviz
 
         ss << newline(indent) << "\"" << passName << "\" " << nodeAttributes << ";";
 
-        for(auto [resourceName, _] : pass->reads) {
-            resourceName.erase(std::remove(resourceName.begin(), resourceName.end(), '\"'), resourceName.end());
-            ss << newline(indent)
-               << fmt::format("\"{}\" -> \"{}\" [label=\"{}\"]{}", graph.getResourceWrite(resourceName).name, passName, resourceName, edgeAttributes);
+        for(auto dependent : pass->reads) {
+            dependent.name.erase(std::remove(dependent.name.begin(), dependent.name.end(), '\"'), dependent.name.end());
+            for(auto const &dependency : graph.getResourceWrite(dependent.name)) {
+                ss << newline(indent) << fmt::format("\"{}\" -> \"{}\" [label=\"{}\"]{}", dependency.name, passName, dependent.name, edgeAttributes);
+            }
         }
     }
 
@@ -389,49 +402,47 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
             .storage = std::unique_ptr<IRenderPassStorage>(pass.storage->clone()),
         };
 
-        LOG_TRACE("Adding pass {} queue {}", renderGraphPass.name, string_VkQueueFlagBits(renderGraphPass.queue));
+        RG_LOG_TRACE("Adding pass \"{}\" queue {}", renderGraphPass.name, string_VkQueueFlagBits(renderGraphPass.queue));
 
         RenderPassBuilder passBuilder(&resourceBuilder);
         renderGraphPass.storage->setup(passBuilder, data);
         for(auto const &[name, traits] : passBuilder.getWrites()) {
-            LOG_TRACE("  Writes {} {}", name, string_VkAccessFlags2(traits.access));
+            RG_LOG_TRACE("  Writes {} {}", name, string_VkAccessFlags2(traits.access));
             auto &resourceInfo = renderGraph.resources[name];
 
-            if(!resourceInfo.written.name.empty()) {
-                LOG_ERROR("Cannot write to resource \"{}\" more than once!(error in pass \"{}\")", name, renderGraphPass.name);
-                return false;
-            }
             resourceInfo.name = name;
-            resourceInfo.written = { renderGraphPass.name, traits };
+            resourceInfo.written.emplace_back(renderGraphPass.name, traits);
 
             renderGraphPass.writes.emplace_back(name, traits);
         }
-        for(auto const &[name, traits] : passBuilder.getReads()) {
-            LOG_TRACE("  Reads {} {}", name, string_VkAccessFlags2(traits.access));
-            auto &resourceInfo = renderGraph.resources[name];
-            if(resourceInfo.written.name == renderGraphPass.name) {
+        for(auto const &info : passBuilder.getReads()) {
+            RG_LOG_TRACE("  Reads {} {}", info.name, string_VkAccessFlags2(info.traits.access));
+            auto &resourceInfo = renderGraph.resources[info.name];
+            auto it = std::find_if(resourceInfo.written.begin(), resourceInfo.written.end(), [&](auto const &e) {
+                return e.name == renderGraphPass.name;
+            });
+            if(it != resourceInfo.written.end() && it->traits.valid() && info.traits.valid()) {
                 LOG_ERROR("Cannot read and write to the same resource \"{}\". Use different names!(error in pass \"{}\")",
-                    name,
+                    info.name,
                     renderGraphPass.name);
                 return false;
             }
 
-            resourceInfo.name = name;
-            resourceInfo.read.emplace_back(renderGraphPass.name, traits);
-
-            renderGraphPass.reads.emplace_back(name, traits);
+            resourceInfo.name = info.name;
+            resourceInfo.read.emplace_back(info.name, info.traits, renderGraphPass.name);
+            renderGraphPass.reads.emplace_back(info);
         }
         for(auto const &dependencyName : passBuilder.getExplicitDependencies()) {
-            LOG_TRACE("  Explicitly depends on \"{}\"", dependencyName);
+            RG_LOG_TRACE("  Explicitly depends on \"{}\"", dependencyName);
             renderGraphPass.explicitPassDependencies.emplace_back(dependencyName);
             dependencies.emplace_back(passName, dependencyName);
         }
     }
 
-    LOG_TRACE("Resources:");
+    RG_LOG_TRACE("Resources:");
 
     for(auto const &[name, info] : resourceBuilder.getExternalResources()) {
-        LOG_TRACE("  External resource {} {}", name, info.eResource);
+        RG_LOG_TRACE("  External resource {} {}", name, info.eResource);
         if(renderGraph.resources.contains(name) && renderGraph.resources.at(name).ci.type != ResourceCreateInfo::Unknown) {
             LOG_ERROR("Resoure \"{}\" of different type already exists", name);
             return false;
@@ -443,7 +454,7 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
         resourceInfo.ci = ResourceCreateInfo(info);
     }
     for(auto const &[name, info] : resourceBuilder.getImageResources()) {
-        LOG_TRACE("  Image resource {} {} {} {}x{}x{} resize to target {} -> {}x{} allow reuse {}",
+        RG_LOG_TRACE("  Image resource {} {} {} {}x{}x{} resize to target {} -> {}x{} allow reuse {}",
             name,
             string_VkFormat(info.imageInfo.format),
             string_VkImageType(info.imageInfo.imageType),
@@ -465,7 +476,7 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
         resourceInfo.ci = info;
     }
     for(auto const &[name, info] : resourceBuilder.getBufferResources()) {
-        LOG_TRACE("  Buffer resource {} {} bytes", name, info.size);
+        RG_LOG_TRACE("  Buffer resource {} {} bytes", name, info.size);
         if(renderGraph.resources.contains(name) && renderGraph.resources.at(name).ci.type != ResourceCreateInfo::Unknown) {
             LOG_ERROR("Resoure \"{}\" of different type already exists", name);
             return false;
@@ -480,7 +491,7 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
 
     // Convert alias resources to their targets
     for(auto const &[name, target] : renderGraph.aliasResources) {
-        LOG_TRACE("  Alias resource \"{}\" -> \"{}\"", name, target);
+        RG_LOG_TRACE("  Alias resource \"{}\" -> \"{}\"", name, target);
         if(renderGraph.resources.contains(name) && renderGraph.resources.at(name).ci.type != ResourceCreateInfo::Unknown) {
             LOG_ERROR("Resoure \"{}\" of different type already exists", name);
             return false;
@@ -503,25 +514,19 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
         auto const &srcResource = renderGraph.resources.at(name);
         auto &targetResource = renderGraph.resources.at(target);
         targetResource.read.append_range(srcResource.read);
+        targetResource.written.append_range(srcResource.written);
 
-        if(!srcResource.written.name.empty() && !srcResource.name.empty() && srcResource.written.name != srcResource.name) {
-            LOG_ERROR("Resource \"{}\", written by \"{}\" and its alias \"{}\", written by \"{}\" conflict!", target, targetResource.written.name, name, srcResource.written.name);
-            return false;
-        }
-
-        if(targetResource.written.name.empty()) {
-            targetResource.written.name = srcResource.written.name;
-        }
-
-        for(auto const &[passName, _] : srcResource.read) {
-            auto &pass = renderGraph.passes.at(passName);
-            auto it = std::find_if(pass.reads.begin(), pass.reads.end(), [&](auto const &e){ return e.name == name; });
+        for(auto const &info : srcResource.read) {
+            auto &pass = renderGraph.passes.at(info.name);
+            auto it = std::find_if(pass.reads.begin(), pass.reads.end(), [&](auto const &e) { return e.name == name; });
             assert(it != pass.reads.end());
             it->name = target;
         }
-        if(!srcResource.written.name.empty()) {
-            auto &pass = renderGraph.passes.at(srcResource.written.name);
-            std::find_if(pass.writes.begin(), pass.writes.end(), [&](auto const &e){ return e.name == name; })->name = target;
+        for(auto const &[passName, _] : srcResource.written) {
+            auto &pass = renderGraph.passes.at(passName);
+            auto it = std::find_if(pass.writes.begin(), pass.writes.end(), [&](auto const &e) { return e.name == name; });
+            assert(it != pass.writes.end());
+            it->name = target;
         }
     }
     for(auto const &[name, _] : renderGraph.aliasResources) {
@@ -541,11 +546,18 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
                 return false;
             }
         }
-        for(auto const &[res, _] : pass.reads) {
-            if(!(renderGraph.resources.contains(res) && renderGraph.resources.at(res).ci.type != ResourceCreateInfo::Unknown)) {
-                LOG_ERROR("Pass \"{}\" reads from unknown resource \"{}\"", pass.name, res);
+        for(auto const &info : pass.reads) {
+            if(!(renderGraph.resources.contains(info.name) && renderGraph.resources.at(info.name).ci.type != ResourceCreateInfo::Unknown)) {
+                LOG_ERROR("Pass \"{}\" reads from unknown resource \"{}\"", pass.name, info.name);
                 return false;
             }
+        }
+        for(auto const &dependency : pass.explicitPassDependencies) {
+            if(!renderGraph.passes.contains(dependency)) {
+                LOG_ERROR("Pass \"{}\" explicitly depends on unknown pass \"{}\"", pass.name, dependency);
+                return false;
+            }
+            renderGraph.passes.at(dependency).explicitPassDependents.emplace_back(pass.name);
         }
     }
 
@@ -572,24 +584,47 @@ static bool processPass(std::string const &passName, _impl::RenderGraphImpl &ren
     // Cull passes results of which are not used anywhere,
     // Unless the resource is external
     bool used = false;
-    for(auto const &resource : pass.writes) {
-        auto const &info = renderGraph.resources.at(resource.name);
-        if(!info.read.empty() || info.ci.type == ResourceCreateInfo::External) {
-            used = true;
-            break;
+    used = !pass.explicitPassDependents.empty();
+    if(!used) {
+        for(auto const &resource : pass.writes) {
+            auto const &info = renderGraph.resources.at(resource.name);
+
+            if(info.ci.type == ResourceCreateInfo::External ||
+                true){//std::find_if(info.read.begin(), info.read.end(), [&](auto const &e) { return e.pass.empty() || e.pass == pass.name; }) != info.read.end()) {
+                used = true;
+                break;
+            }
         }
     }
     if(!used) {
+        RG_LOG_TRACE("  Pass \"{}\" is unused!", pass.name);
         return true;
     }
 
-    for(auto const &resource : pass.reads) {
-        auto const &info = renderGraph.resources.at(resource.name);
-        if(!processPass(info.written.name, renderGraph, depth - 1, true)) {
-            return false;
+    RG_LOG_TRACE("Processing pass \"{}\"", pass.name);
+
+    // Process passes that still read from the old versions of resources this pass writes to.
+    for(auto const &resource : pass.writes) {
+        auto &info = renderGraph.resources.at(resource.name);
+        for(auto const &dependency : info.read) {
+            if(dependency.history || dependency.pass == info.lastPassWrite) {
+                if(!processPass(dependency.name, renderGraph, depth - 1, true)) {
+                    return false;
+                }
+            }
         }
     }
 
+    // Process dependencies.
+    for(auto const &resource : pass.reads) {
+        if(!resource.pass.empty()) {
+            if(!processPass(resource.pass, renderGraph, depth - 1, true)) {
+                return false;
+            }
+        }
+    }
+
+    // Process explicit dependencies.
     for(auto const &passName : pass.explicitPassDependencies) {
         if(!processPass(passName, renderGraph, depth - 1, true)) {
             return false;
@@ -600,45 +635,63 @@ static bool processPass(std::string const &passName, _impl::RenderGraphImpl &ren
         nodeState = NodeState::Added;
         pass.index = renderGraph.passStack.size();
         renderGraph.passStack.emplace_back(pass.name);
-        if(backtrack)
+        RG_LOG_TRACE("  Adding pass.");
+        if(backtrack) {
+            RG_LOG_TRACE("  Backtracking.");
             return true;
+        }
     }
 
+    for(auto const &pass : pass.explicitPassDependents) {
+        if(!processPass(pass, renderGraph, depth - 1, backtrack)) {
+            return false;
+        }
+    }
     for(auto const &resource : pass.writes) {
-        auto const &info = renderGraph.resources.at(resource.name);
-        for(auto const &[dependencyName, _] : info.read)
-            if(!processPass(dependencyName, renderGraph, depth - 1, backtrack))
-                return false;
+        auto &resourceInfo = renderGraph.resources.at(resource.name);
+        for(auto const &info : resourceInfo.read) {
+            if(info.pass.empty()) {
+                for(auto const &dependency : resourceInfo.written) {
+                    if(dependency.name != pass.name) {
+                        if(!processPass(dependency.name, renderGraph, depth - 1, backtrack)) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            if(info.pass == pass.name || info.pass.empty()) {
+                if(!processPass(info.name, renderGraph, depth - 1, backtrack)) {
+                    return false;
+                }
+            }
+        }
+        resourceInfo.lastPassWrite = pass.name;
     }
 
     return true;
-}
-static std::string printDependencies(RenderPass const &pass) {
-    std::string reads;
-    for(auto [name, traits] : pass.reads)
-        reads.append(name).append("; ");
-    if(reads.empty())
-        reads = "none";
-    std::string writes;
-    for(auto [name, traits] : pass.writes)
-        reads.append(name).append("; ");
-    if(writes.empty())
-        writes = "none";
-
-    return fmt::format("reads {:>40} | writes {:>40}", reads, writes);
 }
 static void calculateLifetimes(_impl::RenderGraphImpl &renderGraph) {
     ZoneScoped;
 
     for(auto &[_, resource] : renderGraph.resources) {
-        for(auto const &[passName, traits] : resource.read) {
-            auto const &pass = renderGraph.passes.at(passName);
+        for(auto const &info : resource.read) {
+            auto const &pass = renderGraph.passes.at(info.name);
             resource.lifetimeEnd = std::max(resource.lifetimeEnd, pass.index);
         }
-        if(!resource.written.name.empty()) {
-            auto const &pass = renderGraph.passes.at(resource.written.name);
+        for(auto const &info : resource.written) {
+            auto const &pass = renderGraph.passes.at(info.name);
             resource.lifetimeBegin = std::min(resource.lifetimeBegin, pass.index);
         }
+        if(resource.written.empty()) {
+            resource.lifetimeBegin = 0;
+        }
+
+        RG_LOG_TRACE("Resource \"{}\" \n  begin {} -> \"{}\" \n  end {} -> \"{}\"",
+            resource.name,
+            resource.lifetimeBegin,
+            renderGraph.passStack[resource.lifetimeBegin],
+            resource.lifetimeEnd,
+            renderGraph.passStack[resource.lifetimeEnd]);
     }
 }
 static bool isCompatible(RenderGraphImageCreateInfo const &first, RenderGraphImageCreateInfo const &second) {
@@ -651,7 +704,8 @@ static bool isCompatible(RenderGraphImageCreateInfo const &first, RenderGraphIma
                                      first.imageInfo.dimensions.mipLevels == second.imageInfo.dimensions.mipLevels &&
                                      first.imageInfo.dimensions.arrayLayers == second.imageInfo.dimensions.arrayLayers &&
                                      first.imageInfo.dimensions.samples == second.imageInfo.dimensions.samples)) &&
-        (first.imageInfo.sampler.flags & second.imageInfo.sampler.flags) && first.imageInfo.sampler.magFilter == second.imageInfo.sampler.magFilter &&
+        (first.imageInfo.sampler.flags == second.imageInfo.sampler.flags) &&
+        first.imageInfo.sampler.magFilter == second.imageInfo.sampler.magFilter &&
         first.imageInfo.sampler.minFilter == second.imageInfo.sampler.minFilter &&
         first.imageInfo.sampler.mipmapMode == second.imageInfo.sampler.mipmapMode && // still... going...
         first.imageInfo.sampler.addressModeU == second.imageInfo.sampler.addressModeU &&
@@ -725,11 +779,11 @@ static Entity findPoolResource(ResourceCreateInfo const &ci, _impl::RenderGraphI
 static void aliasResources(_impl::RenderGraphImpl &renderGraph) {
     ZoneScoped;
 
-    LOG_TRACE("Aliasing resources");
+    RG_LOG_TRACE("Aliasing resources");
     for(uint i = 0; i < renderGraph.passStack.size(); ++i) {
         auto const &pass = renderGraph.passes.at(renderGraph.passStack.at(i));
 
-        LOG_TRACE("  Processing pass {}", pass.name);
+        RG_LOG_TRACE("  Processing pass {}", pass.name);
 
         // Allocate
         for(auto const &[resourceName, traits] : pass.writes) {
@@ -750,9 +804,9 @@ static void aliasResources(_impl::RenderGraphImpl &renderGraph) {
                 if(resource.ci.type == ResourceCreateInfo::Image && resource.ci.image.keep) {
                     e.emplace<PleaseKeepTheImageContents>();
                 }
-                LOG_TRACE("    Adding new pool resource {} for {} {}", e, resourceName, string_VkAccessFlagBits2(traits.access));
+                RG_LOG_TRACE("    Adding new pool resource {} for {} {}", e, resourceName, string_VkAccessFlagBits2(traits.access));
             } else {
-                LOG_TRACE("    Found pool resource {} for resource {} {}", e, resourceName, string_VkAccessFlagBits2(traits.access));
+                RG_LOG_TRACE("    Found pool resource {} for resource {} {}", e, resourceName, string_VkAccessFlagBits2(traits.access));
                 e.name(std::string(e.name()) + "," + resourceName);
             }
 
@@ -766,8 +820,8 @@ static void aliasResources(_impl::RenderGraphImpl &renderGraph) {
         }
 
         // Free
-        for(auto const &[resourceName, traits] : pass.reads) {
-            auto &resource = renderGraph.resources.at(resourceName);
+        for(auto const &info : pass.reads) {
+            auto &resource = renderGraph.resources.at(info.name);
             // Dummy resources may not be recycled
             if(!resource.eResource)
                 continue;
@@ -776,9 +830,9 @@ static void aliasResources(_impl::RenderGraphImpl &renderGraph) {
             if(resource.eResource.contains<ResourceAllocationInfo>()) {
                 auto &allocInfo = resource.eResource.get<ResourceAllocationInfo>();
                 if(ci.type == ResourceCreateInfo::Image) {
-                    allocInfo.imageUsage |= traits.imageTraits.usage;
+                    allocInfo.imageUsage |= info.traits.imageTraits.usage;
                 } else {
-                    allocInfo.bufferUsage |= traits.bufferTraits.usage;
+                    allocInfo.bufferUsage |= info.traits.bufferTraits.usage;
                 }
             }
 
@@ -789,7 +843,7 @@ static void aliasResources(_impl::RenderGraphImpl &renderGraph) {
                 continue;
 
             if(resource.lifetimeEnd <= i) {
-                LOG_TRACE("    Freeing resource {} {}", resource.name, resource.eResource);
+                RG_LOG_TRACE("    Freeing resource {} {}", resource.name, resource.eResource);
                 renderGraph.resourcePool.emplace(resource.eResource);
             }
         }
@@ -798,7 +852,7 @@ static void aliasResources(_impl::RenderGraphImpl &renderGraph) {
 static void allocateResources(_impl::RenderGraphImpl &renderGraph) {
     ZoneScoped;
 
-    LOG_TRACE("Allocating resources");
+    RG_LOG_TRACE("Allocating resources");
     if(!renderGraph.reg)
         return;
     for(auto e : renderGraph.reg->view<ResourceAllocationInfo, PlzAllocate>()) {
@@ -810,7 +864,7 @@ static void allocateResources(_impl::RenderGraphImpl &renderGraph) {
         assert(allocInfo.ci.type == ResourceCreateInfo::Image || allocInfo.ci.type == ResourceCreateInfo::Buffer);
 
         if(allocInfo.ci.type == ResourceCreateInfo::Image) {
-            LOG_TRACE("  Allocating image resource {} for {}", static_cast<Entity &>(e), string_VkImageUsageFlags(allocInfo.imageUsage));
+            RG_LOG_TRACE("  Allocating image resource {} for {}", static_cast<Entity &>(e), string_VkImageUsageFlags(allocInfo.imageUsage));
             assert(allocInfo.imageUsage != 0);
             vk::ImageCreateInfo imageCreateInfo{
                 .usage = allocInfo.imageUsage,
@@ -828,7 +882,7 @@ static void allocateResources(_impl::RenderGraphImpl &renderGraph) {
                 assert(e.get<vk::Image>().view);
             }
         } else {
-            LOG_TRACE("  Allocating buffer resource {} for {} {} bytes",
+            RG_LOG_TRACE("  Allocating buffer resource {} for {} {} bytes",
                 static_cast<Entity &>(e),
                 string_VkBufferUsageFlags(allocInfo.bufferUsage),
                 allocInfo.bufferSize);
@@ -852,25 +906,29 @@ static bool buildBarriers(_impl::RenderGraphImpl &renderGraph) {
     std::unordered_map<Entity, Barrier::Scope> lastScope;
     for(auto const &passName : renderGraph.passStack) {
         auto const &pass = renderGraph.passes.at(passName);
-        for(auto const &[resourceName, traits] : pass.reads) {
-            auto const &resource = renderGraph.resources.at(resourceName);
-
-            uint32_t queue = VK_QUEUE_FAMILY_IGNORED;
-            if(!renderGraph.queueFamilies.indices.contains(pass.queue)) {
-                LOG_ERROR("Pass \"{}\" needs queue {} which is not in queue families provided to the frame graph!",
-                    pass.name,
-                    string_VkQueueFlagBits(pass.queue));
-                return false;
-            } else {
-                queue = renderGraph.queueFamilies.indices.at(pass.queue);
+        uint32_t queue = VK_QUEUE_FAMILY_IGNORED;
+        if(!renderGraph.queueFamilies.indices.contains(pass.queue)) {
+            LOG_ERROR("Pass \"{}\" needs queue {} which is not in queue families provided to the frame graph!",
+                pass.name,
+                string_VkQueueFlagBits(pass.queue));
+            return false;
+        } else {
+            queue = renderGraph.queueFamilies.indices.at(pass.queue);
+        }
+        for(auto const &info : pass.reads) {
+            if(!info.traits.valid()) {
+                continue;
             }
+
+            auto const &resource = renderGraph.resources.at(info.name);
+
             lastScope[resource.eResource] = {
-                .layout = traits.imageTraits.layout,
-                .bufferUsage = traits.bufferTraits.usage,
-                .imageUsage = traits.imageTraits.usage,
+                .layout = info.traits.imageTraits.layout,
+                .bufferUsage = info.traits.bufferTraits.usage,
+                .imageUsage = info.traits.imageTraits.usage,
                 .queueIndex = queue,
-                .access = traits.access,
-                .stages = traits.stages,
+                .access = info.traits.access,
+                .stages = info.traits.stages,
             };
         }
     }
@@ -881,30 +939,38 @@ static bool buildBarriers(_impl::RenderGraphImpl &renderGraph) {
         pass.barriers.reserve(pass.reads.size() + pass.writes.size());
         uint32_t queue = renderGraph.queueFamilies.indices.at(pass.queue);
 
-        for(auto const &[resourceName, traits] : pass.reads) {
-            auto const &resource = renderGraph.resources.at(resourceName);
+        for(auto const &info : pass.reads) {
+            if(!info.traits.valid()) {
+                RG_LOG_TRACE("  Ignoring \"{}\"->\"{}\" barrier -> {}.", info.name, info.pass, string_VkAccessFlags2(info.traits.access));
+                continue;
+            }
+            auto const &resource = renderGraph.resources.at(info.name);
             bool history = resource.eResource.contains<PleaseKeepTheImageContents>() && !resourceState.contains(resource.eResource);
             auto &state = resourceState[resource.eResource];
             auto prevState = history ? lastScope.at(resource.eResource) : state;
 
             state = {
-                .layout = traits.imageTraits.layout,
-                .bufferUsage = traits.bufferTraits.usage,
-                .imageUsage = traits.imageTraits.usage,
+                .layout = info.traits.imageTraits.layout,
+                .bufferUsage = info.traits.bufferTraits.usage,
+                .imageUsage = info.traits.imageTraits.usage,
                 .queueIndex = queue,
-                .access = traits.access,
-                .stages = traits.stages,
+                .access = info.traits.access,
+                .stages = info.traits.stages,
             };
             pass.barriers.emplace_back(Barrier{
                 .resource = resource.name,
                 .src = prevState,
                 .dst = state,
-                .subresourceRange = traits.imageTraits.subresourceRange,
-                .offset = traits.bufferTraits.offset,
-                .size = traits.bufferTraits.size,
+                .subresourceRange = info.traits.imageTraits.subresourceRange,
+                .offset = info.traits.bufferTraits.offset,
+                .size = info.traits.bufferTraits.size,
             });
         }
         for(auto const &[resourceName, traits] : pass.writes) {
+            if(!traits.valid()) {
+                RG_LOG_TRACE("  Ignoring \"{}\" barrier -> {}.", resourceName, string_VkAccessFlags2(traits.access));
+                continue;
+            }
             auto const &resource = renderGraph.resources.at(resourceName);
             auto &state = resourceState[resource.eResource];
             auto prevState = state;
@@ -950,15 +1016,36 @@ RenderGraph egn::rg::buildRenderGraph(RenderGraphBuilder const &builder, void *d
         }
     }
 
-    LOG_TRACE("Pass stack:");
+#if RENDER_GRAPH_LOG
+    RG_LOG_TRACE("Pass stack:");
     for(uint32_t i = 0; i < renderGraph.passStack.size(); ++i) {
         auto passName = renderGraph.passStack[i];
         auto const &pass = renderGraph.passes.at(passName);
-        LOG_TRACE("{:>2}) {:>15}: {}", i, passName, printDependencies(pass));
+        RG_LOG_TRACE("{:>2}) {}:", i, passName);
+        std::string reads;
+        for(auto const &info : pass.reads)
+            reads.append(info.name).append("; ");
+        if(reads.empty())
+            reads = "none";
+        RG_LOG_TRACE("  Reads: {}", reads);
+
+        std::string writes;
+        for(auto const &[name, traits] : pass.writes)
+            writes.append(name).append("; ");
+        if(writes.empty())
+            writes = "none";
+        RG_LOG_TRACE("  Writes: {}", writes);
     }
+#endif
 
     if(renderGraph.passStack.empty()) {
         LOG_ERROR("Pass stack empty!");
+    }
+
+    for(auto &[_, resource] : renderGraph.resources) {
+        std::sort(resource.written.begin(), resource.written.end(), [&](auto const &lhs, auto const &rhs) {
+            return renderGraph.passes.at(lhs.name).index < renderGraph.passes.at(rhs.name).index;
+        });
     }
 
     calculateLifetimes(renderGraph);

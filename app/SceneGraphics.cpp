@@ -14,11 +14,8 @@ void scene::TestScene::addCustomGraphics() {
     builder.addPass(rg::makePass<GridPassData>(
         "grid", VK_QUEUE_GRAPHICS_BIT,
         [&](rg::RenderPassBuilder &builder, void *) {
-            builder->addImageResource("grid_out", egn::MAIN_IMAGE_INFO);
-            builder->addAliasResource("main_image", "grid_out");
-
-            builder.attachResourceRead("gbuffer_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS);
-            builder.attachResourceWrite("grid_out", egn::COLOR_ATTACHMENT_TRAITS);
+            builder.attachResourceRead({"gbuffer_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS});
+            builder.attachResourceWrite({"main_image", egn::COLOR_ATTACHMENT_TRAITS});
 
             builder.addExplicitDependency("lighting");
         },
@@ -46,7 +43,7 @@ void scene::TestScene::addCustomGraphics() {
                 assert(passData.pipeline.get<vk::Pipeline>().valid);
             }
             passData.depth = result.getResource("gbuffer_depth");
-            passData.out = result.getResource("grid_out");
+            passData.out = result.getResource("main_image");
             assert(passData.depth.valid());
             assert(passData.out.valid());
         },

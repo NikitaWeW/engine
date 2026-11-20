@@ -74,13 +74,7 @@ static glm::mat4 getTransform(Entity e) {
 
 static void setupGBufferPass(egn::rg::RenderPassBuilder &builder, void *pRenderer) {
     PassData &renderer = *static_cast<PassData *>(pRenderer);
-    builder->addImageResource("gbuffer_render_albedo", {
-        .imageInfo = {
-            .format = VK_FORMAT_R8G8B8A8_UNORM,
-            .view = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT},
-        },
-        .resizeToTarget = true,
-    });
+    builder->addImageResource("gbuffer_render_albedo", MAIN_IMAGE_INFO);
     builder->addImageResource("gbuffer_render_position", {
         .imageInfo = {
             .format = VK_FORMAT_R8G8B8A8_UNORM,
@@ -110,13 +104,13 @@ static void setupGBufferPass(egn::rg::RenderPassBuilder &builder, void *pRendere
         .resizeToTarget = true, 
     });
 
-    builder.attachResourceWrite("gbuffer_render_albedo", egn::COLOR_ATTACHMENT_TRAITS);
-    builder.attachResourceWrite("gbuffer_render_position", egn::COLOR_ATTACHMENT_TRAITS);
-    builder.attachResourceWrite("gbuffer_render_normal", egn::COLOR_ATTACHMENT_TRAITS);
-    builder.attachResourceWrite("gbuffer_render_pbr", egn::COLOR_ATTACHMENT_TRAITS);
-    builder.attachResourceWrite("gbuffer_render_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS);
+    builder.attachResourceWrite({ "gbuffer_render_albedo", egn::COLOR_ATTACHMENT_TRAITS });
+    builder.attachResourceWrite({ "gbuffer_render_position", egn::COLOR_ATTACHMENT_TRAITS });
+    builder.attachResourceWrite({ "gbuffer_render_normal", egn::COLOR_ATTACHMENT_TRAITS });
+    builder.attachResourceWrite({ "gbuffer_render_pbr", egn::COLOR_ATTACHMENT_TRAITS });
+    builder.attachResourceWrite({ "gbuffer_render_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS });
 
-    // Use these as inputs. 
+    // Use these as inputs.
     // New passes can override these aliases to add post processing to the gbuffer.
     builder->addAliasResource("gbuffer_albedo", "gbuffer_render_albedo");
     builder->addAliasResource("gbuffer_position", "gbuffer_render_position");
@@ -147,8 +141,8 @@ static void compileGBufferPass(gbuffer_data &passData, egn::rg::RenderGraph cons
                 },
             },
             .attachments = {
-                //        albedo                    position                  normal                         pbr
-                .color = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM},
+                //        albedo                            position                  normal                         pbr
+                .color = {MAIN_IMAGE_INFO.imageInfo.format, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM},
                 .depth = renderer.depthFormat(),
             },
             .depthStencil = {
@@ -388,7 +382,8 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
         std::vector<glm::mat4> bones;
         for(auto e : renderer.reg().view<ModelInstance, CurrentAnimation>()) {
             for(auto const &bone : e.get<CurrentAnimation>().boneMatrices) {
-                bones.emplace_back(bone * getTransform(e) * getTransform(e.get<ModelInstance>().eModel) * glm::inverse(getTransform(e.get<ModelInstance>().eModel)));
+                bones.emplace_back(bone * getTransform(e) * getTransform(e.get<ModelInstance>().eModel) *
+                                   glm::inverse(getTransform(e.get<ModelInstance>().eModel)));
             }
         }
 
@@ -421,11 +416,11 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
 
 static void setupLightingPass(egn::rg::RenderPassBuilder &builder, void *) {
     builder->addImageResource("lighting_out", MAIN_IMAGE_INFO);
-    builder.attachResourceRead("gbuffer_albedo", SHADER_COLOR_READ_TRAITS);
-    builder.attachResourceRead("gbuffer_position", SHADER_COLOR_READ_TRAITS);
-    builder.attachResourceRead("gbuffer_normal", SHADER_COLOR_READ_TRAITS);
-    builder.attachResourceRead("gbuffer_pbr", SHADER_COLOR_READ_TRAITS);
-    builder.attachResourceWrite("lighting_out", COLOR_ATTACHMENT_TRAITS);
+    builder.attachResourceRead({ "gbuffer_albedo", SHADER_COLOR_READ_TRAITS });
+    builder.attachResourceRead({ "gbuffer_position", SHADER_COLOR_READ_TRAITS });
+    builder.attachResourceRead({ "gbuffer_normal", SHADER_COLOR_READ_TRAITS });
+    builder.attachResourceRead({ "gbuffer_pbr", SHADER_COLOR_READ_TRAITS });
+    builder.attachResourceWrite({ "lighting_out", COLOR_ATTACHMENT_TRAITS });
 
     builder->addAliasResource("main_image", "lighting_out");
 }
@@ -570,8 +565,8 @@ static void runLightingPass(lighting_data &passData, VkCommandBuffer cb, void *p
 }
 
 static void setupBlitPass(egn::rg::RenderPassBuilder &builder, void *) {
-    builder.attachResourceRead("main_image", TRANSFER_SRC_TRAITS);
-    builder.attachResourceWrite("target", TRANSFER_DST_TRAITS);
+    builder.attachResourceRead({ "main_image", TRANSFER_SRC_TRAITS });
+    builder.attachResourceWrite({ "target", TRANSFER_DST_TRAITS });
 }
 static void compileBlitPass(swapchain_blit_data &passData, egn::rg::RenderGraph const &res, void *) {
     passData.target = res.getResource("target");
@@ -783,9 +778,7 @@ void egn::EngineRenderer::preFrame(RestrictedEntity<vk::Image> target, uint fram
     updateResourceAllocator(*mImpl, reg);
 
     if(std::ranges::distance(reg.view<egn::ResourceDirty>()))
-        LOG_TRACE("{} resources are dirty! {}",
-            std::ranges::distance(reg.view<egn::ResourceDirty>()),
-            reg.view<egn::ResourceDirty>());
+        LOG_TRACE("{} resources are dirty! {}", std::ranges::distance(reg.view<egn::ResourceDirty>()), reg.view<egn::ResourceDirty>());
 
     mImpl->passData.uniformBuffer().free(frameIndex);
 

@@ -34,6 +34,7 @@ struct ResourceTraits {
     VkAccessFlags2 access = VK_ACCESS_NONE;
     VkPipelineStageFlags2 stages = VK_PIPELINE_STAGE_NONE;
 
+    /// @brief If the traits are invalid, no barrier is placed.
     bool valid() const {
         return access != VK_ACCESS_NONE && stages != VK_PIPELINE_STAGE_NONE && (bufferTraits.valid() || imageTraits.valid());
     }
@@ -41,6 +42,20 @@ struct ResourceTraits {
 struct ResourceUsage {
     std::string name;
     ResourceTraits traits;
+};
+struct ResourceReadUsage : public ResourceUsage {
+    /// Required pass that wrote to this resource.
+    /// Leave empty to use the last pass.
+    std::string pass;
+
+    /// Whether to use the resource from the last frame.
+    /// Pass field is ignored when enabled.
+    bool history = false;
+
+    ResourceReadUsage() = default;
+    inline ResourceReadUsage(std::string_view name, ResourceTraits const &traits, std::string_view pass = ""):
+        ResourceUsage(std::string(name), traits), pass(pass) {
+    }
 };
 
 // Component (for external resources)
@@ -103,7 +118,7 @@ namespace _impl {
 
 class RenderPassBuilder {
 private:
-    std::vector<ResourceUsage> mReads;
+    std::vector<ResourceReadUsage> mReads;
     std::vector<ResourceUsage> mWrites;
     std::vector<std::string> mExplicitDependencies;
 
@@ -115,12 +130,12 @@ public:
         return resource();
     }
 
-    void attachResourceRead(std::string_view resourceName, ResourceTraits traits);
-    void attachResourceWrite(std::string_view resourceName, ResourceTraits traits);
+    void attachResourceRead(ResourceReadUsage const &resource);
+    void attachResourceWrite(ResourceUsage const &resource);
     /// @brief Tells the builder that the pass must be executed only after passName.
     void addExplicitDependency(std::string_view passName);
 
-    std::vector<ResourceUsage> const &getReads() const;
+    std::vector<ResourceReadUsage> const &getReads() const;
     std::vector<ResourceUsage> const &getWrites() const;
     std::vector<std::string> const &getExplicitDependencies() const;
 };
@@ -229,9 +244,10 @@ struct Barrier {
 struct RenderPass {
     std::string name;
     uint index = 0; // In the pass stack
-    std::vector<ResourceUsage> reads;
+    std::vector<ResourceReadUsage> reads;
     std::vector<ResourceUsage> writes;
     std::vector<std::string> explicitPassDependencies;
+    std::vector<std::string> explicitPassDependents;
     std::vector<Barrier> barriers;
     VkQueueFlagBits queue;
     std::unique_ptr<IRenderPassStorage> storage;
@@ -278,9 +294,7 @@ public:
     void clear();
 };
 
-enum class ResourceType {
-    External, Image, Buffer, Alias
-};
+enum class ResourceType { External, Image, Buffer, Alias };
 
 /// @brief Executable render graph.
 class RenderGraph {
@@ -306,17 +320,17 @@ public:
     /// Multiple resources may have the same entity reused.
     /// Returns an invalid entity if the resource is not found.
     Entity getResource(std::string const &name) const;
-    
+
     /// @throws If the render graph does not contain the resource.
     ResourceType getResourceType(std::string const &name) const;
 
     /// @brief Get the names of the passes that read from the resource.
     /// @throws If the render graph does not contain the resource.
-    std::vector<ResourceUsage> const &getResourceRead(std::string const &name) const;
+    std::vector<ResourceReadUsage> const &getResourceRead(std::string const &name) const;
 
-    /// @brief Get the name of the pass that write to the resource, empty if no write.
+    /// @brief Get the name of the passes that write to the resource in chronological order.
     /// @throws If the render graph does not contain the resource.
-    ResourceUsage const &getResourceWrite(std::string const &name) const;
+    std::vector<ResourceUsage> const &getResourceWrite(std::string const &name) const;
 
     /// @brief Returns all resources used by this render graph.
     std::unordered_set<Entity> const &getAllocatedResources() const;
