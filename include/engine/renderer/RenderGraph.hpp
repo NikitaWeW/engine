@@ -44,17 +44,12 @@ struct ResourceUsage {
     ResourceTraits traits;
 };
 struct ResourceReadUsage : public ResourceUsage {
-    /// Required pass that wrote to this resource.
-    /// Leave empty to use the last pass.
-    std::string pass;
-
-    /// Whether to use the resource from the last frame.
-    /// Pass field is ignored when enabled.
+    /// Whether to use the resource from the previous frame.
     bool history = false;
 
     ResourceReadUsage() = default;
-    inline ResourceReadUsage(std::string_view name, ResourceTraits const &traits, std::string_view pass = ""):
-        ResourceUsage(std::string(name), traits), pass(pass) {
+    inline ResourceReadUsage(std::string_view name, ResourceTraits const &traits, bool history = false):
+        ResourceUsage(std::string(name), traits), history(history) {
     }
 };
 
@@ -247,7 +242,6 @@ struct RenderPass {
     std::vector<ResourceReadUsage> reads;
     std::vector<ResourceUsage> writes;
     std::vector<std::string> explicitPassDependencies;
-    std::vector<std::string> explicitPassDependents;
     std::vector<Barrier> barriers;
     VkQueueFlagBits queue;
     std::unique_ptr<IRenderPassStorage> storage;
@@ -294,8 +288,6 @@ public:
     void clear();
 };
 
-enum class ResourceType { External, Image, Buffer, Alias };
-
 /// @brief Executable render graph.
 class RenderGraph {
 private:
@@ -320,7 +312,10 @@ public:
     /// Multiple resources may have the same entity reused.
     /// Returns an invalid entity if the resource is not found.
     Entity getResource(std::string const &name) const;
-
+    
+    enum class ResourceType {
+        External, Image, Buffer, Alias
+    };
     /// @throws If the render graph does not contain the resource.
     ResourceType getResourceType(std::string const &name) const;
 
@@ -328,15 +323,18 @@ public:
     /// @throws If the render graph does not contain the resource.
     std::vector<ResourceReadUsage> const &getResourceRead(std::string const &name) const;
 
-    /// @brief Get the name of the passes that write to the resource in chronological order.
+    /// @brief Get the name of the pass that write to the resource, empty if no write.
     /// @throws If the render graph does not contain the resource.
-    std::vector<ResourceUsage> const &getResourceWrite(std::string const &name) const;
+    ResourceUsage const &getResourceWrite(std::string const &name) const;
 
     /// @brief Returns all resources used by this render graph.
     std::unordered_set<Entity> const &getAllocatedResources() const;
 
     /// @brief Returns all resources used by this render graph.
     std::unordered_map<std::string, Entity> const &getExternalResources() const;
+
+    /// @brief Returns all resources used by this render graph.
+    std::unordered_map<std::string, std::string> const &getAliasResources() const;
 
     /// @brief Get the render pass information.
     RenderPass const *getPass(std::string const &name) const;

@@ -4,6 +4,7 @@ namespace rg = egn::rg;
 namespace vk = egn::vk;
 
 void scene::TestScene::addCustomGraphics() {
+    return;
     auto &builder = mRenderer->builder();
 
     struct GridPassData {
@@ -14,10 +15,8 @@ void scene::TestScene::addCustomGraphics() {
     builder.addPass(rg::makePass<GridPassData>(
         "grid", VK_QUEUE_GRAPHICS_BIT,
         [&](rg::RenderPassBuilder &builder, void *) {
-            builder.attachResourceRead({"gbuffer_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS});
-            builder.attachResourceWrite({"main_image", egn::COLOR_ATTACHMENT_TRAITS});
-
-            builder.addExplicitDependency("lighting");
+            egn::injectPass(builder, "main_image", "grid_main_image", egn::COLOR_ATTACHMENT_TRAITS);
+            egn::injectPass(builder, "gbuffer_depth", "grid_gbuffer_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS);
         },
         [&](GridPassData &passData, rg::RenderGraph const &result, void *pRenderer) {
             egn::PassData &renderer = *static_cast<egn::PassData *>(pRenderer);
@@ -42,8 +41,8 @@ void scene::TestScene::addCustomGraphics() {
                 passData.pipeline.emplace<vk::Pipeline>(vk::makePipeline(passData.pipeline.get<vk::Shader>(), { }, pipelineCi));
                 assert(passData.pipeline.get<vk::Pipeline>().valid);
             }
-            passData.depth = result.getResource("gbuffer_depth");
-            passData.out = result.getResource("main_image");
+            passData.depth = result.getResource("grid_main_image");
+            passData.out = result.getResource("grid_gbuffer_depth");
             assert(passData.depth.valid());
             assert(passData.out.valid());
         },
