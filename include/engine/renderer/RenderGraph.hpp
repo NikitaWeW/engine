@@ -63,14 +63,12 @@ struct RenderGraphImageCreateInfo {
     /// When set to true the dimensions in imageInfo may be omitted.
     bool resizeToTarget = false;
     glm::vec2 resizeRatio{ 1.0f };
-    bool keep = false;
 };
 struct RenderGraphBufferCreateInfo {
     VkDeviceSize size = 0;
 };
 struct RenderGraphExternalResourceInfo {
     Entity eResource;
-    bool keep = false;
 };
 // Component
 struct RenderGraphResource { };
@@ -78,11 +76,27 @@ struct RenderGraphResource { };
 // Adding this component to the resource allows new render graphs to use it instead of allocating new ones.
 struct RenderGraphUnusedResource { };
 
+struct RenderGraphResourceCreateInfo {
+    enum Type { None = 0, External, Image, Buffer } type = None;
+    union {
+        RenderGraphExternalResourceInfo external;
+        RenderGraphImageCreateInfo image;
+        RenderGraphBufferCreateInfo buffer;
+    };
+
+    RenderGraphResourceCreateInfo();
+    RenderGraphResourceCreateInfo(RenderGraphExternalResourceInfo const &info);
+    RenderGraphResourceCreateInfo(RenderGraphImageCreateInfo const &info);
+    RenderGraphResourceCreateInfo(RenderGraphBufferCreateInfo const &info);
+    RenderGraphResourceCreateInfo(RenderGraphResourceCreateInfo const &o);
+    RenderGraphResourceCreateInfo(RenderGraphResourceCreateInfo &&o);
+    RenderGraphResourceCreateInfo &operator=(RenderGraphResourceCreateInfo const &o);
+    RenderGraphResourceCreateInfo &operator=(RenderGraphResourceCreateInfo &&o);
+    ~RenderGraphResourceCreateInfo();
+};
 class RenderGraphResourceBuilder {
 private:
-    std::unordered_map<std::string, RenderGraphExternalResourceInfo> mExternalResources;
-    std::unordered_map<std::string, RenderGraphImageCreateInfo> mImageResources;
-    std::unordered_map<std::string, RenderGraphBufferCreateInfo> mBufferResources;
+    std::unordered_map<std::string, RenderGraphResourceCreateInfo> mResources;
     std::unordered_map<std::string, std::string> mAliasResources;
 public:
     /// @brief Yup it adds an external resource.
@@ -90,19 +104,19 @@ public:
     /// @param eResource Either valid entity containing vk::Image or vk::Buffer or invalid entity.
     /// @param keep Keeps the contents of the resource from a previous frame (whether to set the barrier layout to undefined). Image only.
     /// @returns True if the resource was added successfully.
-    bool addExternalResource(std::string const &name, RenderGraphExternalResourceInfo info);
-    bool addImageResource(std::string const &name, RenderGraphImageCreateInfo info);
-    bool addBufferResource(std::string const &name, RenderGraphBufferCreateInfo info);
+    bool addResource(std::string const &name, RenderGraphResourceCreateInfo info);
     /// @brief Tells the builder that the @p name resource is actually @p target.
     /// Can be called multiple times. The alias source will be overriden.
     void addAliasResource(std::string const &name, std::string const &target);
 
     bool contains(std::string const &name) const;
 
-    std::unordered_map<std::string, RenderGraphExternalResourceInfo> const &getExternalResources() const;
-    std::unordered_map<std::string, RenderGraphImageCreateInfo> const &getImageResources() const;
-    std::unordered_map<std::string, RenderGraphBufferCreateInfo> const &getBufferResources() const;
-    std::unordered_map<std::string, std::string> const &getAliasResources() const;
+    inline std::unordered_map<std::string, RenderGraphResourceCreateInfo> const &getResources() const {
+        return mResources;
+    }
+    inline std::unordered_map<std::string, std::string> const &getAliasResources() const {
+        return mAliasResources;
+    }
 };
 
 class RenderGraphBuilder;
@@ -242,6 +256,7 @@ struct RenderPass {
     std::vector<ResourceReadUsage> reads;
     std::vector<ResourceUsage> writes;
     std::vector<std::string> explicitPassDependencies;
+    std::vector<std::string> explicitPassDependents;
     std::vector<Barrier> barriers;
     VkQueueFlagBits queue;
     std::unique_ptr<IRenderPassStorage> storage;
@@ -288,6 +303,29 @@ public:
     void clear();
 };
 
+struct ResourceInfo {
+    std::string name;
+
+    Entity eResource;
+    RenderGraphResourceCreateInfo ci;
+
+    // Indices in the pass stack
+    uint lifetimeBegin = std::numeric_limits<uint>::max();
+    uint lifetimeEnd = 0;
+
+    std::vector<std::string> aliased;
+    std::vector<ResourceReadUsage> read;
+    ResourceUsage written;
+};
+struct AliasResourceInfo {
+    std::string name;
+    std::string target;
+    std::string realTarget;
+
+    std::vector<ResourceReadUsage> read;
+    ResourceUsage written;
+};
+
 /// @brief Executable render graph.
 class RenderGraph {
 private:
@@ -327,14 +365,11 @@ public:
     /// @throws If the render graph does not contain the resource.
     ResourceUsage const &getResourceWrite(std::string const &name) const;
 
-    /// @brief Returns all resources used by this render graph.
-    std::unordered_set<Entity> const &getAllocatedResources() const;
+    /// @brief Returns all resources used by this render graph (not aliases).
+    std::unordered_map<std::string, ResourceInfo> const &getResources() const;
 
-    /// @brief Returns all resources used by this render graph.
-    std::unordered_map<std::string, Entity> const &getExternalResources() const;
-
-    /// @brief Returns all resources used by this render graph.
-    std::unordered_map<std::string, std::string> const &getAliasResources() const;
+    /// @brief Returns all alias resources used by this render graph.
+    std::unordered_map<std::string, AliasResourceInfo> const &getAliasResources() const;
 
     /// @brief Get the render pass information.
     RenderPass const *getPass(std::string const &name) const;

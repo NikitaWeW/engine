@@ -74,35 +74,35 @@ static glm::mat4 getTransform(Entity e) {
 
 static void setupGBufferPass(egn::rg::RenderPassBuilder &builder, void *pRenderer) {
     PassData &renderer = *static_cast<PassData *>(pRenderer);
-    builder->addImageResource("gbuffer_render_albedo", {
+    builder->addResource("gbuffer_render_albedo", rg::RenderGraphImageCreateInfo{
         .imageInfo = {
             .format = VK_FORMAT_R8G8B8A8_UNORM,
             .view = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT},
         },
         .resizeToTarget = true,
     });
-    builder->addImageResource("gbuffer_render_position", {
+    builder->addResource("gbuffer_render_position", rg::RenderGraphImageCreateInfo{
         .imageInfo = {
             .format = VK_FORMAT_R8G8B8A8_UNORM,
             .view = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT},
         },
         .resizeToTarget = true,
     });
-    builder->addImageResource("gbuffer_render_normal", {
+    builder->addResource("gbuffer_render_normal", rg::RenderGraphImageCreateInfo{
         .imageInfo = {
             .format = VK_FORMAT_R16G16B16A16_SFLOAT,
             .view = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT},
         },
         .resizeToTarget = true,
     });
-    builder->addImageResource("gbuffer_render_pbr", {
+    builder->addResource("gbuffer_render_pbr", rg::RenderGraphImageCreateInfo{
         .imageInfo = {
             .format = VK_FORMAT_R8G8B8A8_UNORM,
             .view = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT},
         },
         .resizeToTarget = true,
     });
-    builder->addImageResource("gbuffer_render_depth", { 
+    builder->addResource("gbuffer_render_depth", rg::RenderGraphImageCreateInfo {
         .imageInfo = { 
             .format = renderer.depthFormat(),
             .view = { .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT }, 
@@ -213,11 +213,11 @@ static void compileGBufferPass(gbuffer_data &passData, egn::rg::RenderGraph cons
     assert(passData.shader.valid() && passData.shader->valid);
     assert(passData.pipeline.valid() && passData.pipeline->valid);
 
-    passData.albedo = res.getResource("gbuffer_albedo");
-    passData.position = res.getResource("gbuffer_position");
-    passData.normal = res.getResource("gbuffer_normal");
-    passData.pbr = res.getResource("gbuffer_pbr");
-    passData.depth = res.getResource("gbuffer_depth");
+    passData.albedo = res.getResource("gbuffer_render_albedo");
+    passData.position = res.getResource("gbuffer_render_position");
+    passData.normal = res.getResource("gbuffer_render_normal");
+    passData.pbr = res.getResource("gbuffer_render_pbr");
+    passData.depth = res.getResource("gbuffer_render_depth");
 }
 static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRenderer) {
     PassData &renderer = *static_cast<PassData *>(pRenderer);
@@ -420,7 +420,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
 }
 
 static void setupLightingPass(egn::rg::RenderPassBuilder &builder, void *) {
-    builder->addImageResource("lighting_out", MAIN_IMAGE_INFO);
+    builder->addResource("lighting_out", MAIN_IMAGE_INFO);
     builder.attachResourceRead({"gbuffer_albedo", SHADER_COLOR_READ_TRAITS});
     builder.attachResourceRead({"gbuffer_position", SHADER_COLOR_READ_TRAITS});
     builder.attachResourceRead({"gbuffer_normal", SHADER_COLOR_READ_TRAITS});
@@ -674,7 +674,7 @@ egn::EngineRenderer::EngineRenderer(Registry &reg, vk::Device const &device) {
 
     builder().setAllocInfo(ALLOCATION_INFO, reg);
     builder().setQueueFamilies(device.queueFamilies);
-    builder().resource().addExternalResource("target", { });
+    builder().resource().addResource("target", rg::RenderGraphExternalResourceInfo{ });
 
     builder().addPass(rg::makePass<gbuffer_data>("gbuffer", VK_QUEUE_GRAPHICS_BIT, setupGBufferPass, compileGBufferPass, runGBufferPass));
     builder().addPass(rg::makePass<lighting_data>("lighting", VK_QUEUE_GRAPHICS_BIT, setupLightingPass, compileLightingPass, runLightingPass));

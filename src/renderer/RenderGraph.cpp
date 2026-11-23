@@ -16,78 +16,56 @@ using namespace egn::rg;
 
 enum class NodeState { None = 0, Visited, Added };
 
-struct ResourceCreateInfo {
-    enum Type { Unknown, External, Image, Buffer } type = Unknown;
-    union {
-        RenderGraphExternalResourceInfo external;
-        RenderGraphImageCreateInfo image;
-        RenderGraphBufferCreateInfo buffer;
-    };
+RenderGraphResourceCreateInfo::RenderGraphResourceCreateInfo() {
+}
+RenderGraphResourceCreateInfo::RenderGraphResourceCreateInfo(RenderGraphResourceCreateInfo const &o) {
+    *this = o;
+}
+RenderGraphResourceCreateInfo::RenderGraphResourceCreateInfo(RenderGraphResourceCreateInfo &&o) {
+    *this = std::move(o);
+}
+RenderGraphResourceCreateInfo &RenderGraphResourceCreateInfo::operator=(RenderGraphResourceCreateInfo const &o) {
+    type = o.type;
+    switch(type) {
+        case External: external = o.external; break;
+        case Image: image = o.image; break;
+        case Buffer: buffer = o.buffer; break;
+        case None: break;
+    }
+    return *this;
+}
+RenderGraphResourceCreateInfo &RenderGraphResourceCreateInfo::operator=(RenderGraphResourceCreateInfo &&o) {
+    type = std::move(o.type);
+    switch(type) {
+        case External: external = std::move(o.external); break;
+        case Image: image = std::move(o.image); break;
+        case Buffer: buffer = std::move(o.buffer); break;
+        case None: break;
+    }
+    return *this;
+}
+RenderGraphResourceCreateInfo::~RenderGraphResourceCreateInfo() {
+}
+RenderGraphResourceCreateInfo::RenderGraphResourceCreateInfo(RenderGraphExternalResourceInfo const &info) {
+    type = External;
+    external = info;
+}
+RenderGraphResourceCreateInfo::RenderGraphResourceCreateInfo(RenderGraphImageCreateInfo const &info) {
+    type = Image;
+    image = info;
+}
+RenderGraphResourceCreateInfo::RenderGraphResourceCreateInfo(RenderGraphBufferCreateInfo const &info) {
+    type = Buffer;
+    buffer = info;
+}
 
-    ResourceCreateInfo() {
-    }
-    ResourceCreateInfo(ResourceCreateInfo const &o) {
-        *this = o;
-    }
-    ResourceCreateInfo(ResourceCreateInfo &&o) {
-        *this = std::move(o);
-    }
-    ResourceCreateInfo &operator=(ResourceCreateInfo const &o) {
-        type = o.type;
-        switch(type) {
-            case External: external = o.external; break;
-            case Image: image = o.image; break;
-            case Buffer: buffer = o.buffer; break;
-            case Unknown: break;
-        }
-        return *this;
-    }
-    ResourceCreateInfo &operator=(ResourceCreateInfo &&o) {
-        type = std::move(o.type);
-        switch(type) {
-            case External: external = std::move(o.external); break;
-            case Image: image = std::move(o.image); break;
-            case Buffer: buffer = std::move(o.buffer); break;
-            case Unknown: break;
-        }
-        return *this;
-    }
-    ~ResourceCreateInfo() {
-    }
-    ResourceCreateInfo(RenderGraphExternalResourceInfo const &info) {
-        type = External;
-        external = info;
-    }
-    ResourceCreateInfo(RenderGraphImageCreateInfo const &info) {
-        type = Image;
-        image = info;
-    }
-    ResourceCreateInfo(RenderGraphBufferCreateInfo const &info) {
-        type = Buffer;
-        buffer = info;
-    }
-};
 struct ResourceAllocationInfo {
-    ResourceCreateInfo ci;
+    RenderGraphResourceCreateInfo ci;
     VkImageUsageFlags imageUsage = 0;
     VkBufferUsageFlags bufferUsage = 0;
     VkDeviceSize bufferSize = 0;
 };
 struct PlzAllocate { };
-struct ResourceInfo {
-    std::string name;
-
-    Entity eResource;
-    bool keepImage = false;
-    ResourceCreateInfo ci;
-
-    // Indices in the pass stack
-    uint lifetimeBegin = std::numeric_limits<uint>::max();
-    uint lifetimeEnd = 0;
-
-    std::vector<ResourceReadUsage> read;
-    ResourceUsage written;
-};
 struct egn::rg::_impl::RenderGraphImpl {
     vk::AllocationCreateInfo allocInfo;
     Registry *reg = nullptr;
@@ -97,41 +75,37 @@ struct egn::rg::_impl::RenderGraphImpl {
     std::unordered_map<std::string, NodeState> nodeState;
     std::unordered_map<std::string, RenderPass> passes;
     std::unordered_map<std::string, ResourceInfo> resources;
-    std::unordered_map<std::string, std::string> aliasResources;
+    std::unordered_map<std::string, AliasResourceInfo> aliases;
     std::vector<std::string> passStack;
+
+    inline bool isAlias(std::string const &name) const {
+        return aliases.contains(name);
+    }
+    inline ResourceInfo &getRes(std::string const &name) {
+        return resources.at(name);
+    }
+    inline AliasResourceInfo &getAlias(std::string const &name) {
+        return aliases.at(name);
+    }
 };
 
 struct egn::rg::RenderGraphImpl {
     std::unordered_map<std::string, RenderPass> passes;
     std::unordered_map<std::string, ResourceInfo> resources;
+    std::unordered_map<std::string, AliasResourceInfo> aliases;
     std::vector<std::string> passStack;
-    std::unordered_map<std::string, std::string> aliasResources;
-    std::unordered_set<Entity> allocatedResources; // For easy access
-    std::unordered_map<std::string, Entity> externalResources;
 };
 
-bool RenderGraphResourceBuilder::addExternalResource(std::string const &name, RenderGraphExternalResourceInfo info) {
-    if(mExternalResources.contains(std::string(name))) {
+bool RenderGraphResourceBuilder::addResource(std::string const &name, RenderGraphResourceCreateInfo info) {
+    if(info.type == RenderGraphResourceCreateInfo::None) {
+        LOG_ERROR("Invalid resource type ResourceCreateInfo::None!");
+        return false;
+    }
+    if(mResources.contains(std::string(name))) {
         LOG_ERROR("External resource \"{}\" already exists!", name);
         return false;
     }
-    mExternalResources[std::string(name)] = info;
-    return true;
-}
-bool RenderGraphResourceBuilder::addImageResource(std::string const &name, RenderGraphImageCreateInfo info) {
-    if(mImageResources.contains(std::string(name))) {
-        LOG_ERROR("Image resource \"{}\" already exists!", name);
-        return false;
-    }
-    mImageResources[std::string(name)] = info;
-    return true;
-}
-bool RenderGraphResourceBuilder::addBufferResource(std::string const &name, RenderGraphBufferCreateInfo info) {
-    if(mBufferResources.contains(std::string(name))) {
-        LOG_ERROR("Buffer resource \"{}\" already exists!", name);
-        return false;
-    }
-    mBufferResources[std::string(name)] = info;
+    mResources[std::string(name)] = info;
     return true;
 }
 void RenderGraphResourceBuilder::addAliasResource(std::string const &name, std::string const &src) {
@@ -142,20 +116,7 @@ void RenderGraphResourceBuilder::addAliasResource(std::string const &name, std::
     }
 }
 bool RenderGraphResourceBuilder::contains(std::string const &name) const {
-    return mImageResources.contains(name) || mAliasResources.contains(name) || mExternalResources.contains(name) || mBufferResources.contains(name);
-}
-
-std::unordered_map<std::string, RenderGraphExternalResourceInfo> const &RenderGraphResourceBuilder::getExternalResources() const {
-    return mExternalResources;
-}
-std::unordered_map<std::string, RenderGraphImageCreateInfo> const &RenderGraphResourceBuilder::getImageResources() const {
-    return mImageResources;
-}
-std::unordered_map<std::string, RenderGraphBufferCreateInfo> const &RenderGraphResourceBuilder::getBufferResources() const {
-    return mBufferResources;
-}
-std::unordered_map<std::string, std::string> const &RenderGraphResourceBuilder::getAliasResources() const {
-    return mAliasResources;
+    return mResources.contains(name) || mAliasResources.contains(name);
 }
 
 RenderPassBuilder::RenderPassBuilder(RenderGraphResourceBuilder *resourceBuilder) {
@@ -235,8 +196,8 @@ bool RenderGraph::setResource(std::string const &name, Entity eResource) {
     }
 
     std::string realName = name;
-    if(mImpl->aliasResources.contains(name)) {
-        realName = mImpl->aliasResources.at(name);
+    if(mImpl->aliases.contains(name)) {
+        realName = mImpl->aliases.at(name).realTarget;
     }
     if(!mImpl->resources.contains(realName)) {
         LOG_ERROR("Render graph does not contain the resource \"{}\"", realName);
@@ -244,13 +205,12 @@ bool RenderGraph::setResource(std::string const &name, Entity eResource) {
     }
 
     auto &res = mImpl->resources.at(realName);
-    if(res.ci.type != ResourceCreateInfo::External) {
+    if(res.ci.type != RenderGraphResourceCreateInfo::External) {
         LOG_ERROR("Cannot set resource \"{}\", because it is not external!");
         return false;
     }
 
     res.eResource = eResource;
-    mImpl->externalResources[realName] = eResource;
 
     return true;
 }
@@ -258,8 +218,8 @@ Entity RenderGraph::getResource(std::string const &name) const {
     assert(valid());
 
     std::string realName = name;
-    if(mImpl->aliasResources.contains(name)) {
-        realName = mImpl->aliasResources.at(name);
+    if(mImpl->aliases.contains(name)) {
+        realName = mImpl->aliases.at(name).realTarget;
     }
     if(!mImpl->resources.contains(realName)) {
         LOG_ERROR("Render graph does not contain the resource \"{}\"", realName);
@@ -271,7 +231,7 @@ Entity RenderGraph::getResource(std::string const &name) const {
 RenderGraph::ResourceType RenderGraph::getResourceType(std::string const &name) const {
     assert(valid());
 
-    if(mImpl->aliasResources.contains(name)) {
+    if(mImpl->aliases.contains(name)) {
         return ResourceType::Alias;
     }
 
@@ -281,9 +241,9 @@ RenderGraph::ResourceType RenderGraph::getResourceType(std::string const &name) 
     }
 
     switch(mImpl->resources.at(std::string(name)).ci.type) {
-        case ResourceCreateInfo::External: return ResourceType::External; break;
-        case ResourceCreateInfo::Image: return ResourceType::Image; break;
-        case ResourceCreateInfo::Buffer: return ResourceType::Buffer; break;
+        case RenderGraphResourceCreateInfo::External: return ResourceType::External; break;
+        case RenderGraphResourceCreateInfo::Image: return ResourceType::Image; break;
+        case RenderGraphResourceCreateInfo::Buffer: return ResourceType::Buffer; break;
         default: assert(false && "what"); break;
     }
 }
@@ -296,14 +256,6 @@ std::vector<ResourceReadUsage> const &RenderGraph::getResourceRead(std::string c
 
     return mImpl->resources.at(std::string(name)).read;
 }
-std::unordered_set<Entity> const &RenderGraph::getAllocatedResources() const {
-    assert(valid());
-    return mImpl->allocatedResources;
-}
-std::unordered_map<std::string, Entity> const &RenderGraph::getExternalResources() const {
-    assert(valid());
-    return mImpl->externalResources;
-}
 ResourceUsage const &RenderGraph::getResourceWrite(std::string const &name) const {
     assert(valid());
     if(!mImpl->resources.contains(std::string(name))) {
@@ -313,8 +265,11 @@ ResourceUsage const &RenderGraph::getResourceWrite(std::string const &name) cons
 
     return mImpl->resources.at(std::string(name)).written;
 }
-std::unordered_map<std::string, std::string> const &RenderGraph::getAliasResources() const {
-    return mImpl->aliasResources;
+std::unordered_map<std::string, ResourceInfo> const &RenderGraph::getResources() const {
+    return mImpl->resources;
+}
+std::unordered_map<std::string, AliasResourceInfo> const &RenderGraph::getAliasResources() const {
+    return mImpl->aliases;
 }
 RenderPass const *RenderGraph::getPass(std::string const &name) const {
     assert(valid());
@@ -436,74 +391,51 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
         for(auto const &dependencyName : passBuilder.getExplicitDependencies()) {
             RG_LOG_TRACE("  Explicitly depends on \"{}\"", dependencyName);
             renderGraphPass.explicitPassDependencies.emplace_back(dependencyName);
+            renderGraph.passes[dependencyName].explicitPassDependents.emplace_back(renderGraphPass.name);
             dependencies.emplace_back(passName, dependencyName);
         }
     }
 
     RG_LOG_TRACE("Resources:");
 
-    for(auto const &[name, info] : resourceBuilder.getExternalResources()) {
-        RG_LOG_TRACE("  External resource {} {}", name, info.eResource);
-        if(renderGraph.resources.contains(name) && renderGraph.resources.at(name).ci.type != ResourceCreateInfo::Unknown) {
+    for(auto const &[name, info] : resourceBuilder.getResources()) {
+#if RENDER_GRAPH_LOG
+        if(info.type == RenderGraphResourceCreateInfo::External) {
+            RG_LOG_TRACE("  External resource {} {}", name, info.external.eResource);
+        } else if(info.type == RenderGraphResourceCreateInfo::Image) {
+            RG_LOG_TRACE("  Image resource {} {} {} {}x{}x{} resize to target {} -> {}x{}",
+                name,
+                string_VkFormat(info.image.imageInfo.format),
+                string_VkImageType(info.image.imageInfo.imageType),
+                info.image.imageInfo.dimensions.width,
+                info.image.imageInfo.dimensions.height,
+                info.image.imageInfo.dimensions.depth,
+                info.image.resizeToTarget,
+                info.image.resizeRatio.x,
+                info.image.resizeRatio.y);
+        } else if(info.type == RenderGraphResourceCreateInfo::Buffer) {
+            RG_LOG_TRACE("  Buffer resource {} {} bytes", name, info.buffer.size);
+        }
+#endif
+
+        if(renderGraph.resources.contains(name) && renderGraph.resources.at(name).ci.type != RenderGraphResourceCreateInfo::None) {
             LOG_ERROR("Resoure \"{}\" of different type already exists", name);
             return false;
         }
 
         auto &resourceInfo = renderGraph.resources[name];
         resourceInfo.name = name;
-        resourceInfo.eResource = info.eResource;
-        resourceInfo.ci = ResourceCreateInfo(info);
-    }
-    for(auto const &[name, info] : resourceBuilder.getImageResources()) {
-        RG_LOG_TRACE("  Image resource {} {} {} {}x{}x{} resize to target {} -> {}x{} allow reuse {}",
-            name,
-            string_VkFormat(info.imageInfo.format),
-            string_VkImageType(info.imageInfo.imageType),
-            info.imageInfo.dimensions.width,
-            info.imageInfo.dimensions.height,
-            info.imageInfo.dimensions.depth,
-            info.resizeToTarget,
-            info.resizeRatio.x,
-            info.resizeRatio.y,
-            !info.keep);
-
-        if(renderGraph.resources.contains(name) && renderGraph.resources.at(name).ci.type != ResourceCreateInfo::Unknown) {
-            LOG_ERROR("Resoure \"{}\" of different type already exists", name);
-            return false;
+        resourceInfo.ci = RenderGraphResourceCreateInfo(info);
+        if(info.type == RenderGraphResourceCreateInfo::External) {
+            resourceInfo.eResource = info.external.eResource;
         }
-
-        auto &resourceInfo = renderGraph.resources[name];
-        resourceInfo.name = name;
-        resourceInfo.ci = info;
     }
-    for(auto const &[name, info] : resourceBuilder.getBufferResources()) {
-        RG_LOG_TRACE("  Buffer resource {} {} bytes", name, info.size);
-        if(renderGraph.resources.contains(name) && renderGraph.resources.at(name).ci.type != ResourceCreateInfo::Unknown) {
-            LOG_ERROR("Resoure \"{}\" of different type already exists", name);
-            return false;
-        }
-
-        auto &resourceInfo = renderGraph.resources[name];
-        resourceInfo.name = name;
-        resourceInfo.ci = info;
-    }
-
-    renderGraph.aliasResources = resourceBuilder.getAliasResources();
 
     // Convert alias resources to their targets
-    for(auto const &[name, target] : renderGraph.aliasResources) {
+    for(auto const &[name, target] : resourceBuilder.getAliasResources()) {
         RG_LOG_TRACE("  Alias resource \"{}\" -> \"{}\"", name, target);
-        if(renderGraph.resources.contains(name) && renderGraph.resources.at(name).ci.type != ResourceCreateInfo::Unknown) {
+        if(renderGraph.resources.contains(name) && renderGraph.resources.at(name).ci.type != RenderGraphResourceCreateInfo::None) {
             LOG_ERROR("Resoure \"{}\" of different type already exists", name);
-            return false;
-        }
-        if(!renderGraph.resources.contains(target)) {
-            LOG_ERROR("Resource \"{}\" aliases non-existing resource \"{}\"!", name, target);
-            return false;
-        }
-
-        if(renderGraph.aliasResources.contains(target)) {
-            LOG_ERROR("Resource \"{}\" aliases resource \"{}\", which is an alias itself!", name, target);
             return false;
         }
 
@@ -512,31 +444,28 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
             continue;
         }
 
-        auto const &srcResource = renderGraph.resources.at(name);
-        auto &targetResource = renderGraph.resources.at(target);
-        targetResource.read.append_range(srcResource.read);
+        std::string realTarget = target;
+        while(resourceBuilder.getAliasResources().contains(realTarget)) {
+            realTarget = resourceBuilder.getAliasResources().at(realTarget);
+        }
 
-        if(!srcResource.written.name.empty() && !srcResource.name.empty() && srcResource.written.name != srcResource.name) {
-            LOG_ERROR("Resource \"{}\", written by \"{}\" and its alias \"{}\", written by \"{}\" conflict!", target, targetResource.written.name, name, srcResource.written.name);
+        if(!renderGraph.resources.contains(realTarget)) {
+            LOG_ERROR("Resource \"{}\" aliases non-existing resource \"{}\"!", name, realTarget);
             return false;
         }
 
-        if(targetResource.written.name.empty()) {
-            targetResource.written.name = srcResource.written.name;
-        }
+        auto const &srcResource = renderGraph.resources.at(name);
 
-        for(auto const &info : srcResource.read) {
-            auto &pass = renderGraph.passes.at(info.name);
-            auto it = std::find_if(pass.reads.begin(), pass.reads.end(), [&](auto const &e){ return e.name == name; });
-            assert(it != pass.reads.end());
-            it->name = target;
-        }
-        if(!srcResource.written.name.empty()) {
-            auto &pass = renderGraph.passes.at(srcResource.written.name);
-            std::find_if(pass.writes.begin(), pass.writes.end(), [&](auto const &e){ return e.name == name; })->name = target;
-        }
-    }
-    for(auto const &[name, _] : renderGraph.aliasResources) {
+        auto &targetResource = renderGraph.resources.at(realTarget);
+        targetResource.aliased.emplace_back(name);
+
+        auto &aliasInfo = renderGraph.aliases[name];
+        aliasInfo.name = name;
+        aliasInfo.target = target;
+        aliasInfo.realTarget = realTarget;
+        aliasInfo.read = srcResource.read;
+        aliasInfo.written = srcResource.written;
+
         renderGraph.resources.erase(name);
     }
 
@@ -548,13 +477,15 @@ bool egn::rg::_impl::setupRenderGraph(RenderGraphBuilder const &builder, void *d
     }
     for(auto const &[_, pass] : renderGraph.passes) {
         for(auto const &[res, _] : pass.writes) {
-            if(!(renderGraph.resources.contains(res) && renderGraph.resources.at(res).ci.type != ResourceCreateInfo::Unknown)) {
+            if(!(renderGraph.resources.contains(res) && renderGraph.resources.at(res).ci.type != RenderGraphResourceCreateInfo::None) &&
+                !renderGraph.aliases.contains(res)) {
                 LOG_ERROR("Pass \"{}\" writes to unknown resource \"{}\"", pass.name, res);
                 return false;
             }
         }
         for(auto const &info : pass.reads) {
-            if(!(renderGraph.resources.contains(info.name) && renderGraph.resources.at(info.name).ci.type != ResourceCreateInfo::Unknown)) {
+            if(!(renderGraph.resources.contains(info.name) && renderGraph.resources.at(info.name).ci.type != RenderGraphResourceCreateInfo::None) &&
+                !renderGraph.aliases.contains(info.name)) {
                 LOG_ERROR("Pass \"{}\" reads from unknown resource \"{}\"", pass.name, info.name);
                 return false;
             }
@@ -584,25 +515,52 @@ static bool processPass(std::string const &passName, _impl::RenderGraphImpl &ren
     // Unless the resource is external
     bool used = false;
     for(auto const &resource : pass.writes) {
-        auto const &info = renderGraph.resources.at(resource.name);
-        if(!info.read.empty() || info.ci.type == ResourceCreateInfo::External) {
-            used = true;
-            break;
+        if(renderGraph.isAlias(resource.name)) {
+            auto const &info = renderGraph.getAlias(resource.name);
+            if(!info.read.empty() || renderGraph.getRes(info.realTarget).ci.type == RenderGraphResourceCreateInfo::External) {
+                used = true;
+                break;
+            }
+        } else {
+            auto const &info = renderGraph.getRes(resource.name);
+            if(!info.read.empty() || info.ci.type == RenderGraphResourceCreateInfo::External) {
+                used = true;
+                break;
+            }
+            for(auto const &alias : info.aliased) {
+                auto const &info = renderGraph.getAlias(alias);
+                if(!info.read.empty() || renderGraph.getRes(info.realTarget).ci.type == RenderGraphResourceCreateInfo::External) {
+                    used = true;
+                    break;
+                }
+            }
         }
     }
     if(!used) {
+        RG_LOG_TRACE("Pass \"{}\" is unused!", pass.name);
         return true;
     }
 
+    RG_LOG_TRACE("Processing pass \"{}\"", pass.name);
+
+    // Process dependencies
     for(auto const &resource : pass.reads) {
-        auto const &info = renderGraph.resources.at(resource.name);
-        if(!processPass(info.written.name, renderGraph, depth - 1, true)) {
-            return false;
+        RG_LOG_TRACE("  \"{}\" reads \"{}\" {} history {}", pass.name, resource.name, string_VkAccessFlags2(resource.traits.access), resource.history);
+        if(renderGraph.isAlias(resource.name)) {
+            auto const &info = renderGraph.getAlias(resource.name);
+            if(!processPass(info.written.name, renderGraph, depth - 1, true)) {
+                return false;
+            }
+        } else {
+            auto const &info = renderGraph.getRes(resource.name);
+            if(!processPass(info.written.name, renderGraph, depth - 1, true)) {
+                return false;
+            }
         }
     }
-
-    for(auto const &passName : pass.explicitPassDependencies) {
-        if(!processPass(passName, renderGraph, depth - 1, true)) {
+    for(auto const &dependency : pass.explicitPassDependencies) {
+        RG_LOG_TRACE("  \"{}\" depends on \"{}\"", pass.name, dependency);
+        if(!processPass(dependency, renderGraph, depth - 1, true)) {
             return false;
         }
     }
@@ -611,15 +569,54 @@ static bool processPass(std::string const &passName, _impl::RenderGraphImpl &ren
         nodeState = NodeState::Added;
         pass.index = renderGraph.passStack.size();
         renderGraph.passStack.emplace_back(pass.name);
-        if(backtrack)
+        RG_LOG_TRACE("  Adding pass \"{}\"", passName);
+        if(backtrack) {
+            RG_LOG_TRACE("  Backtracking.");
             return true;
+        }
     }
 
+    // Process dependents
     for(auto const &resource : pass.writes) {
-        auto const &info = renderGraph.resources.at(resource.name);
-        for(auto const &dependency : info.read)
-            if(!processPass(dependency.name, renderGraph, depth - 1, backtrack))
-                return false;
+        RG_LOG_TRACE("  \"{}\" writes \"{}\" {}", pass.name, resource.name, string_VkAccessFlags2(resource.traits.access));
+
+        if(renderGraph.isAlias(resource.name)) {
+            auto const &info = renderGraph.getAlias(resource.name);
+            for(auto const &dependency : info.read)
+                if(!processPass(dependency.name, renderGraph, depth - 1, backtrack))
+                    return false;
+
+            // Process passes that read from the actual resource
+            // If there is no pass that writes directly to it
+            auto const &target = renderGraph.getRes(info.realTarget);
+            if(target.written.name.empty()) {
+                for(auto const &dependency : target.read)
+                    if(!processPass(dependency.name, renderGraph, depth - 1, backtrack))
+                        return false;
+            }
+        } else {
+            auto const &info = renderGraph.getRes(resource.name);
+            for(auto const &dependent : info.read) {
+                if(!processPass(dependent.name, renderGraph, depth - 1, backtrack))
+                    return false;
+            }
+            for(auto const &alias : info.aliased) {
+                auto const &aliasInfo = renderGraph.getAlias(alias);
+                if(aliasInfo.target != resource.name) {
+                    continue;
+                }
+
+                for(auto const &dependent : info.read) {
+                    if(!processPass(dependent.name, renderGraph, depth - 1, backtrack))
+                        return false;
+                }
+            }
+        }
+    }
+    for(auto const &passName : pass.explicitPassDependents) {
+        if(!processPass(passName, renderGraph, depth - 1, backtrack)) {
+            return false;
+        }
     }
 
     return true;
@@ -668,20 +665,20 @@ static bool isCompatible(RenderGraphImageCreateInfo const &first, RenderGraphIma
         first.imageInfo.sampler.unnormalizedCoordinates == second.imageInfo.sampler.unnormalizedCoordinates;
 } // let's never do THAT again...
 // Additionally checks the type of an external resource
-static ResourceCreateInfo::Type getResourceType(RestrictedEntity<ResourceAllocationInfo> e) {
+static RenderGraphResourceCreateInfo::Type getResourceType(RestrictedEntity<ResourceAllocationInfo> e) {
     ZoneScoped;
 
     auto const &info = *e;
-    if(info.ci.type == ResourceCreateInfo::External) {
+    if(info.ci.type == RenderGraphResourceCreateInfo::External) {
         assert(e.contains<vk::Image>() || e.contains<vk::Buffer>());
-        return e.contains<vk::Image>() ? ResourceCreateInfo::Image : ResourceCreateInfo::Buffer;
+        return e.contains<vk::Image>() ? RenderGraphResourceCreateInfo::Image : RenderGraphResourceCreateInfo::Buffer;
     } else {
         return info.ci.type;
     }
 }
-static bool isResourceCompatible(Entity e, ResourceCreateInfo const &ci, VkImageUsageFlags usage) {
+static bool isResourceCompatible(Entity e, RenderGraphResourceCreateInfo const &ci, VkImageUsageFlags usage) {
     assert(e);
-    assert(e.contains<ResourceCreateInfo>());
+    assert(e.contains<RenderGraphResourceCreateInfo>());
     auto type = getResourceType(e);
 
     if(type != ci.type)
@@ -692,15 +689,15 @@ static bool isResourceCompatible(Entity e, ResourceCreateInfo const &ci, VkImage
         return false;
     }
 
-    auto const &poolCi = e.get<ResourceCreateInfo>();
+    auto const &poolCi = e.get<RenderGraphResourceCreateInfo>();
 
-    if(ci.type == ResourceCreateInfo::Image && !isCompatible(ci.image, poolCi.image)) {
+    if(ci.type == RenderGraphResourceCreateInfo::Image && !isCompatible(ci.image, poolCi.image)) {
         return false;
     }
 
     return true;
 }
-static Entity findPoolResource(ResourceCreateInfo const &ci, _impl::RenderGraphImpl &renderGraph, VkImageUsageFlags usage = 0) {
+static Entity findPoolResource(RenderGraphResourceCreateInfo const &ci, _impl::RenderGraphImpl &renderGraph, VkImageUsageFlags usage = 0) {
     ZoneScoped;
 
     for(auto poolRes : renderGraph.resourcePool) {
@@ -734,7 +731,7 @@ static void aliasResources(_impl::RenderGraphImpl &renderGraph) {
             auto &e = resource.eResource;
 
             // TODO: external resources are not used before their lifetimes
-            if(resource.ci.type == ResourceCreateInfo::External)
+            if(resource.ci.type == RenderGraphResourceCreateInfo::External)
                 continue;
 
             assert(!e.valid());
@@ -769,7 +766,7 @@ static void aliasResources(_impl::RenderGraphImpl &renderGraph) {
 
             if(resource.eResource.contains<ResourceAllocationInfo>()) {
                 auto &allocInfo = resource.eResource.get<ResourceAllocationInfo>();
-                if(ci.type == ResourceCreateInfo::Image) {
+                if(ci.type == RenderGraphResourceCreateInfo::Image) {
                     allocInfo.imageUsage |= info.traits.imageTraits.usage;
                 } else {
                     allocInfo.bufferUsage |= info.traits.bufferTraits.usage;
@@ -777,9 +774,7 @@ static void aliasResources(_impl::RenderGraphImpl &renderGraph) {
             }
 
             // May not use resources if the contents are used in the next frame
-            if(ci.type == ResourceCreateInfo::Image && ci.image.keep)
-                continue;
-            if(ci.type == ResourceCreateInfo::External && ci.external.keep)
+            if(info.history)
                 continue;
 
             if(resource.lifetimeEnd <= i) {
@@ -801,9 +796,9 @@ static void allocateResources(_impl::RenderGraphImpl &renderGraph) {
         e.try_erase<RenderGraphUnusedResource>();
         e.erase<PlzAllocate>();
 
-        assert(allocInfo.ci.type == ResourceCreateInfo::Image || allocInfo.ci.type == ResourceCreateInfo::Buffer);
+        assert(allocInfo.ci.type == RenderGraphResourceCreateInfo::Image || allocInfo.ci.type == RenderGraphResourceCreateInfo::Buffer);
 
-        if(allocInfo.ci.type == ResourceCreateInfo::Image) {
+        if(allocInfo.ci.type == RenderGraphResourceCreateInfo::Image) {
             RG_LOG_TRACE("  Allocating image resource {} for {}", static_cast<Entity &>(e), string_VkImageUsageFlags(allocInfo.imageUsage));
             assert(allocInfo.imageUsage != 0);
             vk::ImageCreateInfo imageCreateInfo{
@@ -992,24 +987,11 @@ RenderGraph egn::rg::buildRenderGraph(RenderGraphBuilder const &builder, void *d
     }
 
     RenderGraphImpl *res = new RenderGraphImpl{
+        .passes = std::move(renderGraph.passes),
         .resources = std::move(renderGraph.resources),
+        .aliases = std::move(renderGraph.aliases),
         .passStack = std::move(renderGraph.passStack),
-        .aliasResources = std::move(renderGraph.aliasResources),
     };
-
-    for(auto &&[name, pass] : renderGraph.passes) {
-        res->passes[name] = std::move(pass);
-    }
-    for(auto &&[name, resource] : res->resources) {
-        if(!resource.eResource.valid()) {
-            continue;
-        }
-        if(resource.ci.type == ResourceCreateInfo::External) {
-            res->externalResources[name] = resource.eResource;
-        } else {
-            res->allocatedResources.emplace(resource.eResource);
-        }
-    }
 
     return RenderGraph(res);
 }

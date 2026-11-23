@@ -203,13 +203,14 @@ inline std::string dereference(rg::RenderGraphResourceBuilder const &graph, std:
     return graph.getAliasResources().contains(name) ? graph.getAliasResources().at(name) : name;
 }
 inline std::string dereference(rg::RenderGraph const &graph, std::string const &name) {
-    return graph.getAliasResources().contains(name) ? graph.getAliasResources().at(name) : name;
+    return graph.getAliasResources().contains(name) ? graph.getAliasResources().at(name).target : name;
 }
 inline void injectPass(rg::RenderPassBuilder &builder, std::string const &src, std::string const &dst, rg::ResourceTraits const &traits) {
     auto target = dereference(*builder.resource(), src);
     builder->addAliasResource(dst, target);
-    builder.attachResourceRead({dst, NO_BARRIER_TRAITS});
+    builder.attachResourceRead({target, NO_BARRIER_TRAITS});
     builder.attachResourceWrite({dst, traits});
+    builder->addAliasResource(src, dst);
 }
 
 };

@@ -2,8 +2,10 @@
 
 void egn::RenderGraphRenderer::build() {
     if(mRenderGraph.valid()) {
-        for(auto e : mRenderGraph.getAllocatedResources()) {
-            e.try_emplace<rg::RenderGraphUnusedResource>();
+        for(auto const &[name, resource] : mRenderGraph.getResources()) {
+            if(resource.ci.type == rg::RenderGraphResourceCreateInfo::Image) {
+                Entity(resource.eResource).try_emplace<rg::RenderGraphUnusedResource>();
+            }
         }
     }
     mRenderGraph = rg::buildRenderGraph(mBuilder, mData);
