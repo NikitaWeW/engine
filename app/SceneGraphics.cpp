@@ -4,7 +4,6 @@ namespace rg = egn::rg;
 namespace vk = egn::vk;
 
 void scene::TestScene::addCustomGraphics() {
-    return;
     auto &builder = mRenderer->builder();
 
     struct GridPassData {
@@ -41,8 +40,8 @@ void scene::TestScene::addCustomGraphics() {
                 passData.pipeline.emplace<vk::Pipeline>(vk::makePipeline(passData.pipeline.get<vk::Shader>(), { }, pipelineCi));
                 assert(passData.pipeline.get<vk::Pipeline>().valid);
             }
-            passData.depth = result.getResource("grid_main_image");
-            passData.out = result.getResource("grid_gbuffer_depth");
+            passData.depth = result.getResource("grid_gbuffer_depth");
+            passData.out = result.getResource("grid_main_image");
             assert(passData.depth.valid());
             assert(passData.out.valid());
         },

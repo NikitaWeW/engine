@@ -206,8 +206,8 @@ public:
 struct Barrier {
     struct Scope {
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VkBufferUsageFlags2 bufferUsage = 0;
         VkImageUsageFlags imageUsage = 0;
+        VkBufferUsageFlags2 bufferUsage = 0;
 
         uint32_t queueIndex = VK_QUEUE_FAMILY_IGNORED;
         VkAccessFlags2 access = VK_ACCESS_2_NONE;
@@ -224,7 +224,8 @@ struct Barrier {
 
     inline VkImageMemoryBarrier2 getImageBarrier(RestrictedEntity<vk::Image> eResource) const {
         auto const &image = eResource.get<vk::Image>();
-        return { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        return {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
             .srcStageMask = src.stages,
             .srcAccessMask = src.access,
             .dstStageMask = dst.stages,
@@ -234,11 +235,13 @@ struct Barrier {
             .srcQueueFamilyIndex = src.queueIndex,
             .dstQueueFamilyIndex = dst.queueIndex,
             .image = image.image,
-            .subresourceRange = subresourceRange };
+            .subresourceRange = subresourceRange,
+        };
     }
     inline VkBufferMemoryBarrier2 getBufferBarrier(RestrictedEntity<vk::Buffer> eResource) const {
         auto const &buffer = eResource.get<vk::Buffer>();
-        return { .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+        return {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
             .srcStageMask = src.stages,
             .srcAccessMask = src.access,
             .dstStageMask = dst.stages,
@@ -247,7 +250,8 @@ struct Barrier {
             .dstQueueFamilyIndex = dst.queueIndex,
             .buffer = buffer.buffer,
             .offset = offset,
-            .size = size };
+            .size = size,
+        };
     }
 };
 struct RenderPass {
@@ -350,10 +354,8 @@ public:
     /// Multiple resources may have the same entity reused.
     /// Returns an invalid entity if the resource is not found.
     Entity getResource(std::string const &name) const;
-    
-    enum class ResourceType {
-        External, Image, Buffer, Alias
-    };
+
+    enum class ResourceType { External, Image, Buffer, Alias };
     /// @throws If the render graph does not contain the resource.
     ResourceType getResourceType(std::string const &name) const;
 
