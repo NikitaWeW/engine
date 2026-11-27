@@ -1,6 +1,7 @@
 #include "engine/renderer/EngineRenderer.hpp"
 #include "engine/scene/Animation.hpp"
 #include "engine/scene/Camera.hpp"
+#include "engine/renderer/ResourceManager.hpp"
 
 constexpr bool ENABLE_BONE_DEBUG = false;
 
@@ -30,19 +31,14 @@ struct swapchain_blit_data {
     Entity target;
 };
 
+// What a mess!
 struct egn::EngineRendererImpl {
     RenderGraphRenderer *renderGraph = nullptr;
-    vk::Device device;
-    vk::RingBuffer uniformBuffer;
-    Registry *reg = nullptr;
-    uint frameIndex = 0;
     VkCommandPool commandPool;
-    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     ResourceAllocator resourceAllocator;
-    DescriptorManager descManager;
-    Entity camera;
-
     glm::uvec2 lastTargetDimensions{ 0 };
+
+    PassData passData;
 };
 
 static VkFormat getDepthFormat(VkPhysicalDevice dev) {
@@ -72,100 +68,67 @@ static VkCommandPool makeCommandPool(uint32_t index, VkDevice device) {
     vkCreateCommandPool(device, &commandPoolCI, nullptr, &commandPool);
     return commandPool;
 }
-template <typename T> static uint64_t pushUniform(vk::RingBuffer &uniformBuffer, T const &data, uint frame, uint alignment = 16) {
-    uint64_t offset = uniformBuffer.request(sizeof(data), frame, alignment);
-    std::memcpy(static_cast<char *>(uniformBuffer.getBuffer()->hostAddress) + offset, &data, sizeof(data));
-    offset += uniformBuffer.getBuffer()->deviceAddress;
-    return offset;
-}
-template <std::ranges::range T> static uint64_t pushUniform(vk::RingBuffer &uniformBuffer, T const &data, uint frame, uint alignment = 16) {
-    uint32_t size = std::ranges::size(data) * sizeof(*std::ranges::data(data));
-    uint64_t offset = uniformBuffer.request(size, frame, alignment);
-    std::memcpy(static_cast<char *>(uniformBuffer.getBuffer()->hostAddress) + offset, std::ranges::data(data), size);
-    offset += uniformBuffer.getBuffer()->deviceAddress;
-    return offset;
-}
-enum class ShaderType { Glsl, Slang, Auto };
-static vk::Shader makeShader(VkDevice device, std::string_view path, ShaderType type = ShaderType::Auto) {
-    if(type == ShaderType::Auto) {
-        auto ext = path.substr(path.find_last_of('.'));
-        if(ext == ".glsl") {
-            type = ShaderType::Glsl;
-        } else if(ext == ".slang") {
-            type = ShaderType::Slang;
-        } else {
-            LOG_ERROR("Could not deduce shader type for extension \"{}\" in \"{}\"", ext, path);
-            return { };
-        }
-    }
-
-    auto shader = vk::makeShader({
-        .backend = type == ShaderType::Glsl ? vk::ShaderBackend::GLSL : vk::ShaderBackend::SLANG,
-        .src = "shaders/" + std::string(path),
-        .bin = "shaders-bin/" + std::string(path),
-        .device = device,
-        .includeDirs = { "shaders" },
-        .systemIncludeDirs = { "shaders/lib" },
-        .definitions = { },
-        .debugInfo = true,
-    });
-    assert(shader.valid && "Krill issue");
-
-    return shader;
-}
 static glm::mat4 getTransform(Entity e) {
     return e.contains<egn::Transform>() ? e.get<egn::Transform>().getMat() : glm::mat4{ 1.0f };
 }
 
-static void setupGBufferPass(egn::RenderPassBuilder &builder, void *pRenderer) {
-    EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
-    builder->addImageResource("gbuffer_albedo", {
+static void setupGBufferPass(egn::rg::RenderPassBuilder &builder, void *pRenderer) {
+    PassData &renderer = *static_cast<PassData *>(pRenderer);
+    builder->addResource("gbuffer_render_albedo", rg::RenderGraphImageCreateInfo{
         .imageInfo = {
             .format = VK_FORMAT_R8G8B8A8_UNORM,
             .view = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT},
         },
         .resizeToTarget = true,
     });
-    builder->addImageResource("gbuffer_position", {
+    builder->addResource("gbuffer_render_position", rg::RenderGraphImageCreateInfo{
         .imageInfo = {
             .format = VK_FORMAT_R8G8B8A8_UNORM,
             .view = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT},
         },
         .resizeToTarget = true,
     });
-    builder->addImageResource("gbuffer_normal", {
+    builder->addResource("gbuffer_render_normal", rg::RenderGraphImageCreateInfo{
         .imageInfo = {
             .format = VK_FORMAT_R16G16B16A16_SFLOAT,
             .view = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT},
         },
         .resizeToTarget = true,
     });
-    builder->addImageResource("gbuffer_pbr", {
+    builder->addResource("gbuffer_render_pbr", rg::RenderGraphImageCreateInfo{
         .imageInfo = {
             .format = VK_FORMAT_R8G8B8A8_UNORM,
             .view = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT},
         },
         .resizeToTarget = true,
     });
-    builder->addImageResource("gbuffer_depth", { 
+    builder->addResource("gbuffer_render_depth", rg::RenderGraphImageCreateInfo {
         .imageInfo = { 
-            .format = renderer.depthFormat,
+            .format = renderer.depthFormat(),
             .view = { .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT }, 
         },
         .resizeToTarget = true, 
     });
 
-    builder.attachResourceWrite("gbuffer_albedo", egn::COLOR_ATTACHMENT_TRAITS);
-    builder.attachResourceWrite("gbuffer_position", egn::COLOR_ATTACHMENT_TRAITS);
-    builder.attachResourceWrite("gbuffer_normal", egn::COLOR_ATTACHMENT_TRAITS);
-    builder.attachResourceWrite("gbuffer_pbr", egn::COLOR_ATTACHMENT_TRAITS);
-    builder.attachResourceWrite("gbuffer_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS);
+    builder.attachResourceWrite({"gbuffer_render_albedo", egn::COLOR_ATTACHMENT_TRAITS});
+    builder.attachResourceWrite({"gbuffer_render_position", egn::COLOR_ATTACHMENT_TRAITS});
+    builder.attachResourceWrite({"gbuffer_render_normal", egn::COLOR_ATTACHMENT_TRAITS});
+    builder.attachResourceWrite({"gbuffer_render_pbr", egn::COLOR_ATTACHMENT_TRAITS});
+    builder.attachResourceWrite({"gbuffer_render_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS});
+
+    // Use these as inputs. 
+    // New passes can override these aliases to add post processing to the gbuffer.
+    builder->addAliasResource("gbuffer_albedo", "gbuffer_render_albedo");
+    builder->addAliasResource("gbuffer_position", "gbuffer_render_position");
+    builder->addAliasResource("gbuffer_normal", "gbuffer_render_normal");
+    builder->addAliasResource("gbuffer_pbr", "gbuffer_render_pbr");
+    builder->addAliasResource("gbuffer_depth", "gbuffer_render_depth");
 }
-static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult const &res, void *pRenderer) {
-    EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
+static void compileGBufferPass(gbuffer_data &passData, egn::rg::RenderGraph const &res, void *pRenderer) {
+    PassData &renderer = *static_cast<PassData *>(pRenderer);
     if(!passData.shader.valid()) {
-        egn::Entity e = renderer.reg->create();
-        e.emplace<vk::Shader>(makeShader(renderer.device.device, "deferred/gbuffer.glsl"));
+        egn::Entity e = renderer.reg().create();
+        e.emplace<vk::Shader>(makeShader(renderer.device().device, "deferred/gbuffer.glsl"));
         vk::PipelineLayoutCreateInfo layoutCi{ .unsizedDescriptors = { { 0, 0 } } };
         vk::GraphicsPipelineCreateInfo pipelineCi{
             .dynamicState = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR},
@@ -186,7 +149,7 @@ static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult co
             .attachments = {
                 //        albedo                    position                  normal                         pbr
                 .color = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM},
-                .depth = renderer.depthFormat,
+                .depth = renderer.depthFormat(),
             },
             .depthStencil = {
                 .depthTestEnable = true, 
@@ -208,10 +171,10 @@ static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult co
     }
 
     if(ENABLE_BONE_DEBUG && !passData.debugBonePipeline.valid()) {
-        ModelLoader loader(renderer.reg->getReg());
-        passData.debugBoneModel = Entity(renderer.reg, loader.loadFromFile("assets/models/vector.glb"));
-        passData.debugBonePipeline = renderer.reg->create();
-        passData.debugBonePipeline.emplace<vk::Shader>(makeShader(renderer.device.device, "DebugBone.glsl"));
+        ModelLoader loader(renderer.reg().getReg());
+        passData.debugBoneModel = Entity(&renderer.reg(), loader.loadFromFile("assets/models/vector.glb"));
+        passData.debugBonePipeline = renderer.reg().create();
+        passData.debugBonePipeline.emplace<vk::Shader>(makeShader(renderer.device().device, "DebugBone.glsl"));
         vk::PipelineLayoutCreateInfo layoutCi{ .unsizedDescriptors = { { 0, 0 } } };
         vk::GraphicsPipelineCreateInfo pipelineCi{
             .dynamicState = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR},
@@ -228,7 +191,7 @@ static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult co
             .attachments = {
                 //        albedo                    position                  normal                         pbr
                 .color = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM},
-                .depth = renderer.depthFormat,
+                .depth = renderer.depthFormat(),
             },
             .depthStencil = {
                 .depthTestEnable = false, 
@@ -250,14 +213,14 @@ static void compileGBufferPass(gbuffer_data &passData, egn::RenderGraphResult co
     assert(passData.shader.valid() && passData.shader->valid);
     assert(passData.pipeline.valid() && passData.pipeline->valid);
 
-    passData.albedo = res.getResource("gbuffer_albedo");
-    passData.position = res.getResource("gbuffer_position");
-    passData.normal = res.getResource("gbuffer_normal");
-    passData.pbr = res.getResource("gbuffer_pbr");
-    passData.depth = res.getResource("gbuffer_depth");
+    passData.albedo = res.getResource("gbuffer_render_albedo");
+    passData.position = res.getResource("gbuffer_render_position");
+    passData.normal = res.getResource("gbuffer_render_normal");
+    passData.pbr = res.getResource("gbuffer_render_pbr");
+    passData.depth = res.getResource("gbuffer_render_depth");
 }
 static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRenderer) {
-    EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
+    PassData &renderer = *static_cast<PassData *>(pRenderer);
 
     auto const &albedo = passData.albedo.get<vk::Image>();
     auto const &position = passData.position.get<vk::Image>();
@@ -309,7 +272,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
         .imageView = depth.view,
         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .clearValue = { .depthStencil = { 1.0f, 0 } },
     };
 
@@ -360,12 +323,12 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
     std::map<std::pair<egn::Entity, uint>, std::vector<ModelData>> instanceData;
 
     UniformBuffer uBufferData{
-        .projMat = renderer.camera.get<Camera>().projMat,
-        .viewMat = renderer.camera.get<Camera>().viewMat,
+        .projMat = renderer.camera().get<Camera>().projMat,
+        .viewMat = renderer.camera().get<Camera>().viewMat,
     };
-    VkDeviceAddress uniformBufferAddress = pushUniform(renderer.uniformBuffer, uBufferData, renderer.frameIndex, 16);
+    VkDeviceAddress uniformBufferAddress = pushUniform(renderer.uniformBuffer(), uBufferData, renderer.frameIndex(), 16);
 
-    for(auto eInstance : renderer.reg->view<egn::ModelInstance>()) {
+    for(auto eInstance : renderer.reg().view<egn::ModelInstance>()) {
         auto const &instance = eInstance.get<egn::ModelInstance>();
         if(!instance.eModel.valid()) {
             LOG_ERROR("Model instance e has invalid eModel {}", eInstance, instance.eModel);
@@ -386,7 +349,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
             modelData.normMat = glm::transpose(glm::inverse(glm::mat3(modelData.modelMat)));
             modelData.material = mesh.material;
             if(eInstance.contains<CurrentAnimation>()) {
-                modelData.boneData = pushUniform(renderer.uniformBuffer, eInstance.get<CurrentAnimation>().boneMatrices, renderer.frameIndex, 16);
+                modelData.boneData = pushUniform(renderer.uniformBuffer(), eInstance.get<CurrentAnimation>().boneMatrices, renderer.frameIndex(), 16);
                 modelData.animated = true;
             }
         }
@@ -406,7 +369,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
             VkDeviceAddress instanceData;
         } pushConstants;
         pushConstants.uBuffer = uniformBufferAddress;
-        pushConstants.instanceData = pushUniform(renderer.uniformBuffer, data, renderer.frameIndex, 16);
+        pushConstants.instanceData = pushUniform(renderer.uniformBuffer(), data, renderer.frameIndex(), 16);
 
         vkCmdPushConstants(cb,
             passData.pipeline->layout.layout,
@@ -423,7 +386,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
         auto &meh = passData.debugBoneModel.get<VulkanModel>().meshes[0];
 
         std::vector<glm::mat4> bones;
-        for(auto e : renderer.reg->view<ModelInstance, CurrentAnimation>()) {
+        for(auto e : renderer.reg().view<ModelInstance, CurrentAnimation>()) {
             for(auto const &bone : e.get<CurrentAnimation>().boneMatrices) {
                 bones.emplace_back(bone * getTransform(e) * getTransform(e.get<ModelInstance>().eModel) * glm::inverse(getTransform(e.get<ModelInstance>().eModel)));
             }
@@ -436,7 +399,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
             VkDeviceAddress uBuffer;
         } pushConstants;
         pushConstants.uBuffer = uniformBufferAddress;
-        pushConstants.boneData = pushUniform(renderer.uniformBuffer, bones, renderer.frameIndex, 16);
+        pushConstants.boneData = pushUniform(renderer.uniformBuffer(), bones, renderer.frameIndex(), 16);
 
         vkCmdPushConstants(cb,
             passData.pipeline->layout.layout,
@@ -456,46 +419,42 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
     vkCmdEndRendering(cb);
 }
 
-static void setupLightingPass(egn::RenderPassBuilder &builder, void *) {
-    builder->addImageResource("lighting_out", {
-        .imageInfo = {
-            .format = VK_FORMAT_R16G16B16A16_SFLOAT,
-            .view = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT},
-        },
-        .resizeToTarget = true,
-    });
-    builder.attachResourceRead("gbuffer_albedo", SHADER_READ_TRAITS);
-    builder.attachResourceRead("gbuffer_position", SHADER_READ_TRAITS);
-    builder.attachResourceRead("gbuffer_normal", SHADER_READ_TRAITS);
-    builder.attachResourceRead("gbuffer_pbr", SHADER_READ_TRAITS);
-    builder.attachResourceWrite("lighting_out", COLOR_ATTACHMENT_TRAITS);
+static void setupLightingPass(egn::rg::RenderPassBuilder &builder, void *) {
+    builder->addResource("lighting_out", MAIN_IMAGE_INFO);
+    builder.attachResourceRead({"gbuffer_albedo", SHADER_COLOR_READ_TRAITS});
+    builder.attachResourceRead({"gbuffer_position", SHADER_COLOR_READ_TRAITS});
+    builder.attachResourceRead({"gbuffer_normal", SHADER_COLOR_READ_TRAITS});
+    builder.attachResourceRead({"gbuffer_pbr", SHADER_COLOR_READ_TRAITS});
+    builder.attachResourceWrite({"lighting_out", COLOR_ATTACHMENT_TRAITS});
+
+    builder->addAliasResource("main_image", "lighting_out");
 }
-static void compileLightingPass(lighting_data &data, egn::RenderGraphResult const &res, void *pRenderer) {
-    EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
+static void compileLightingPass(lighting_data &data, egn::rg::RenderGraph const &res, void *pRenderer) {
+    PassData &renderer = *static_cast<PassData *>(pRenderer);
 
     if(!data.shader.valid()) {
-        auto e = renderer.reg->create();
-        e.emplace<vk::Shader>(makeShader(renderer.device.device, "deferred/lighting.slang"));
+        auto e = renderer.reg().create();
+        e.emplace<vk::Shader>(makeShader(renderer.device().device, "deferred/lighting.slang"));
         vk::PipelineLayoutCreateInfo layoutCi{
             .dynamicDescriptors = { { .set = 1, .binding = 0 } },
         };
         vk::GraphicsPipelineCreateInfo pipelineCi{
-                    .dynamicState = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR },
-                    .attachments = {
-                        .color = { VK_FORMAT_R16G16B16A16_SFLOAT },
-                        .depth = renderer.depthFormat,
-                    },
-                    .blending = {
-                        .attachments = {NO_BLENDING},
-                    },
-                };
+            .dynamicState = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR },
+            .attachments = {
+                .color = { egn::MAIN_IMAGE_INFO.imageInfo.format },
+                .depth = renderer.depthFormat(),
+            },
+            .blending = {
+                .attachments = {NO_BLENDING},
+            },
+        };
         data.shader = e;
         e.emplace<vk::Pipeline>(vk::makePipeline(data.shader.get<vk::Shader>(), layoutCi, pipelineCi));
         data.pipeline = e;
         e.name("lighting_pipeline");
         vk::allocateDescriptors(data.pipeline.getc());
 
-        renderer.descManager.emplace({
+        renderer.descManager().emplace({
             .dstPipeline = data.pipeline,
             .dstSet = 0,
             .dstBinding = 0,
@@ -505,7 +464,7 @@ static void compileLightingPass(lighting_data &data, egn::RenderGraphResult cons
                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             } },
         });
-        renderer.descManager.emplace({
+        renderer.descManager().emplace({
             .dstPipeline = data.pipeline,
             .dstSet = 0,
             .dstBinding = 1,
@@ -515,7 +474,7 @@ static void compileLightingPass(lighting_data &data, egn::RenderGraphResult cons
                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             } },
         });
-        renderer.descManager.emplace({
+        renderer.descManager().emplace({
             .dstPipeline = data.pipeline,
             .dstSet = 0,
             .dstBinding = 2,
@@ -525,7 +484,7 @@ static void compileLightingPass(lighting_data &data, egn::RenderGraphResult cons
                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             } },
         });
-        renderer.descManager.emplace({
+        renderer.descManager().emplace({
             .dstPipeline = data.pipeline,
             .dstSet = 0,
             .dstBinding = 3,
@@ -542,7 +501,7 @@ static void compileLightingPass(lighting_data &data, egn::RenderGraphResult cons
     data.output = res.getResource("lighting_out");
 }
 static void runLightingPass(lighting_data &passData, VkCommandBuffer cb, void *pRenderer) {
-    EngineRendererImpl &renderer = *static_cast<EngineRendererImpl *>(pRenderer);
+    PassData &renderer = *static_cast<PassData *>(pRenderer);
     auto const &pipeline = passData.pipeline.getc();
 
     VkExtent2D extent = { passData.output.get<vk::Image>().createInfo.image.dimensions.width,
@@ -573,9 +532,9 @@ static void runLightingPass(lighting_data &passData, VkCommandBuffer cb, void *p
 
     VkViewport vp{
         .x = 0,
-        .y = static_cast<float>(extent.height),
+        .y = 0,
         .width = static_cast<float>(extent.width),
-        .height = -static_cast<float>(extent.height),
+        .height = static_cast<float>(extent.height),
         .minDepth = 0.0f,
         .maxDepth = 1.0f,
     };
@@ -594,8 +553,8 @@ static void runLightingPass(lighting_data &passData, VkCommandBuffer cb, void *p
         glm::mat4 projMat;
         glm::mat4 viewMat;
     } pushConstants{
-        .projMat = glm::inverse(renderer.camera.get<Camera>().projMat),
-        .viewMat = glm::inverse(renderer.camera.get<Camera>().viewMat),
+        .projMat = glm::inverse(renderer.camera().get<Camera>().projMat),
+        .viewMat = glm::inverse(renderer.camera().get<Camera>().viewMat),
     };
 
     vkCmdPushConstants(cb,
@@ -610,13 +569,13 @@ static void runLightingPass(lighting_data &passData, VkCommandBuffer cb, void *p
     vkCmdEndRendering(cb);
 }
 
-static void setupBlitPass(egn::RenderPassBuilder &builder, void *) {
-    builder.attachResourceRead("lighting_out", TRANSFER_SRC_TRAITS);
-    builder.attachResourceWrite("target", TRANSFER_DST_TRAITS);
+static void setupBlitPass(egn::rg::RenderPassBuilder &builder, void *) {
+    builder.attachResourceRead({"main_image", TRANSFER_SRC_TRAITS});
+    builder.attachResourceWrite({"target", TRANSFER_DST_TRAITS});
 }
-static void compileBlitPass(swapchain_blit_data &passData, egn::RenderGraphResult const &res, void *) {
+static void compileBlitPass(swapchain_blit_data &passData, egn::rg::RenderGraph const &res, void *) {
     passData.target = res.getResource("target");
-    passData.src = res.getResource("lighting_out");
+    passData.src = res.getResource("main_image");
 }
 static void runBlitPass(swapchain_blit_data &passData, VkCommandBuffer cb, void *) {
     assert(passData.target);
@@ -659,12 +618,12 @@ static void runBlitPass(swapchain_blit_data &passData, VkCommandBuffer cb, void 
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 }
 
-static void updateResourceAllocator(EngineRendererImpl &renderer) {
+static void updateResourceAllocator(EngineRendererImpl &renderer, Registry &reg) {
     renderer.resourceAllocator.begin();
-    for(auto eTexture : renderer.reg->view<egn::Texture2D>(egn::exclude<vk::Image>{ })) {
+    for(auto eTexture : reg.view<egn::Texture2D>(egn::exclude<vk::Image>{ })) {
         renderer.resourceAllocator.processImage(eTexture);
     }
-    for(auto eTexture : renderer.reg->view<egn::Model>(egn::exclude<egn::VulkanModel>{ })) {
+    for(auto eTexture : reg.view<egn::Model>(egn::exclude<egn::VulkanModel>{ })) {
         renderer.resourceAllocator.processModel(eTexture);
     }
     bool updateImages = renderer.resourceAllocator.end();
@@ -677,7 +636,7 @@ static void updateResourceAllocator(EngineRendererImpl &renderer) {
             imageInfos.emplace_back(eImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
 
-        renderer.descManager.emplace({
+        renderer.passData.descManager().emplace({
             .dstPipeline = static_cast<gbuffer_data const *>(renderer.renderGraph->getRenderGraph().getPass("gbuffer")->storage->data())->pipeline,
             .dstSet = 0,
             .dstBinding = 0,
@@ -690,8 +649,8 @@ static void updateResourceAllocator(EngineRendererImpl &renderer) {
 egn::EngineRenderer::EngineRenderer(Registry &reg, vk::Device const &device) {
     mImpl = new EngineRendererImpl();
 
-    mImpl->device = device;
-    mImpl->reg = &reg;
+    mImpl->passData.mDevice = device;
+    mImpl->passData.mReg = &reg;
     vk::AllocationCreateInfo const ALLOCATION_INFO{
         .device = device.device,
         .physicalDevice = device.physicalDevice,
@@ -700,7 +659,7 @@ egn::EngineRenderer::EngineRenderer(Registry &reg, vk::Device const &device) {
     };
 
     // clang-format off
-    mImpl->uniformBuffer = vk::RingBuffer(reg, {
+    mImpl->passData.uniformBuffer() = vk::RingBuffer(reg, {
         .usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
         .allocInfo = ALLOCATION_INFO,
         .size = static_cast<uint32_t>(64 * 1e6), // 64MB
@@ -710,23 +669,19 @@ egn::EngineRenderer::EngineRenderer(Registry &reg, vk::Device const &device) {
     // clang-format on
 
     mImpl->commandPool = makeCommandPool(device.queueFamilies.indices.at(VK_QUEUE_GRAPHICS_BIT), device.device);
-    mImpl->depthFormat = getDepthFormat(device.physicalDevice);
+    mImpl->passData.mDepthFormat = getDepthFormat(device.physicalDevice);
     mImpl->resourceAllocator = ResourceAllocator(ALLOCATION_INFO, mImpl->commandPool, device.queueFamilies.getQueue(VK_QUEUE_GRAPHICS_BIT));
 
-    egn::RenderGraphBuilder builder;
-    builder.setAllocInfo(ALLOCATION_INFO, reg);
-    builder.setQueueFamilies(device.queueFamilies);
-    builder.resource().addExternalResource("target", { });
+    builder().setAllocInfo(ALLOCATION_INFO, reg);
+    builder().setQueueFamilies(device.queueFamilies);
+    builder().resource().addResource("target", rg::RenderGraphExternalResourceInfo{ });
 
-    builder.addPass<gbuffer_data>("gbuffer", VK_QUEUE_GRAPHICS_BIT, setupGBufferPass, compileGBufferPass, runGBufferPass);
-    builder.addPass<lighting_data>("lighting", VK_QUEUE_GRAPHICS_BIT, setupLightingPass, compileLightingPass, runLightingPass);
-    builder.addPass<swapchain_blit_data>("target_blit", VK_QUEUE_TRANSFER_BIT, setupBlitPass, compileBlitPass, runBlitPass);
+    builder().addPass(rg::makePass<gbuffer_data>("gbuffer", VK_QUEUE_GRAPHICS_BIT, setupGBufferPass, compileGBufferPass, runGBufferPass));
+    builder().addPass(rg::makePass<lighting_data>("lighting", VK_QUEUE_GRAPHICS_BIT, setupLightingPass, compileLightingPass, runLightingPass));
+    builder().addPass(rg::makePass<swapchain_blit_data>("target_blit", VK_QUEUE_TRANSFER_BIT, setupBlitPass, compileBlitPass, runBlitPass));
 
-    setData(mImpl);
+    setData(&mImpl->passData);
     mImpl->renderGraph = this;
-
-    build(std::move(builder));
-    assert(initSuccess());
 }
 egn::EngineRenderer::EngineRenderer(EngineRenderer &&o) {
     operator=(std::move(o));
@@ -734,21 +689,21 @@ egn::EngineRenderer::EngineRenderer(EngineRenderer &&o) {
 egn::EngineRenderer &egn::EngineRenderer::operator=(EngineRenderer &&o) {
     std::swap(mImpl, o.mImpl);
     mImpl->renderGraph = this;
-    setData(mImpl);
+    setData(&mImpl->passData);
     return *this;
 }
 egn::EngineRenderer::~EngineRenderer() {
     if(mImpl) {
-        vkDestroyCommandPool(mImpl->device.device, mImpl->commandPool, nullptr);
+        vkDestroyCommandPool(mImpl->passData.device().device, mImpl->commandPool, nullptr);
         delete mImpl;
     }
 }
 
 void egn::EngineRenderer::setCamera(RestrictedEntity<Camera> camera) {
-    mImpl->camera = camera;
+    mImpl->passData.mCamera = camera;
 }
 
-static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity target) {
+static void resizeRenderGraph(rg::RenderGraph const &renderGraph, Entity target) {
     std::unordered_set<Entity> toResize;
     for(auto const &passName : renderGraph.getPassStack()) {
         auto pass = renderGraph.getPass(passName);
@@ -760,7 +715,7 @@ static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity targe
                 continue;
             }
 
-            if(entity.contains<ResizeToTarget>()) {
+            if(entity.contains<rg::ResizeToTarget>()) {
                 toResize.emplace(entity);
             }
         }
@@ -771,7 +726,7 @@ static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity targe
                 continue;
             }
 
-            if(entity.contains<ResizeToTarget>()) {
+            if(entity.contains<rg::ResizeToTarget>()) {
                 toResize.emplace(entity);
             }
         }
@@ -785,7 +740,7 @@ static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity targe
 
         if(!e.contains<vk::Image>() && e.contains<vk::ImageCreateInfo>()) {
             auto &ci = e.get<vk::ImageCreateInfo>();
-            auto const &ratio = e.get<ResizeToTarget>().ratio;
+            auto const &ratio = e.get<rg::ResizeToTarget>().ratio;
             ci.image.dimensions = dimensions;
             ci.image.dimensions.width *= ratio.x;
             ci.image.dimensions.height *= ratio.y;
@@ -805,7 +760,7 @@ static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity targe
             continue;
         }
 
-        auto const &ratio = e.get<ResizeToTarget>().ratio;
+        auto const &ratio = e.get<rg::ResizeToTarget>().ratio;
         vk::destroy(image);
         dstDimensions = dimensions;
         dstDimensions.width *= ratio.x;
@@ -816,26 +771,29 @@ static void resizeRenderGraph(RenderGraphResult const &renderGraph, Entity targe
     }
 }
 void egn::EngineRenderer::preFrame(RestrictedEntity<vk::Image> target, uint frameIndex) {
+    assert(getRenderGraph().valid() && "Forgot to build?");
     RenderGraphRenderer::preFrame(target, frameIndex);
+
+    auto &reg = *mImpl->passData.mReg;
 
     if(mImpl->lastTargetDimensions != glm::uvec2(target->createInfo.image.dimensions.width, target->createInfo.image.dimensions.height)) {
         resizeRenderGraph(getRenderGraph(), target);
     }
 
-    updateResourceAllocator(*mImpl);
+    updateResourceAllocator(*mImpl, reg);
 
-    if(std::ranges::distance(mImpl->reg->view<egn::ResourceDirty>()))
+    if(std::ranges::distance(reg.view<egn::ResourceDirty>()))
         LOG_TRACE("{} resources are dirty! {}",
-            std::ranges::distance(mImpl->reg->view<egn::ResourceDirty>()),
-            mImpl->reg->view<egn::ResourceDirty>());
+            std::ranges::distance(reg.view<egn::ResourceDirty>()),
+            reg.view<egn::ResourceDirty>());
 
-    mImpl->uniformBuffer.free(frameIndex);
+    mImpl->passData.uniformBuffer().free(frameIndex);
 
     // Only one frame in descriptor sets (currently).
-    mImpl->descManager.update(0 /* frameIndex */);
+    mImpl->passData.descManager().update(0 /* frameIndex */);
 
     // Clean up dirty resources that don't have any descriptors.
-    for(auto e : mImpl->reg->view<ResourceDirty>(exclude<ResourceUsage>())) {
+    for(auto e : reg.view<ResourceDirty>(exclude<rg::ResourceUsage>())) {
         e.erase<ResourceDirty>();
     }
 }

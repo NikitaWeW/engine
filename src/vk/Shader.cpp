@@ -353,7 +353,7 @@ static void runOptimizer(Shader &program, spvtools::Optimizer &optimizer) {
         std::vector<uint32_t> optimizedSpriv;
         auto res = optimizer.Run(bin.spirv.data(), bin.spirv.size(), &optimizedSpriv);
         if(!res) {
-            LOG_ERROR("Failed to optimize spirv binary {}", bin.path);
+            LOG_WARN("Failed to optimize spirv binary {}", bin.path);
             continue;
         }
 

@@ -110,7 +110,7 @@ static egn::Entity loadModel(egn::Registry &reg, std::string_view path, std::opt
 
     egn::ModelLoaderOptions options{
         .flipUVs = false,
-        .flipHandiness = true, // ??
+        .flipHandiness = false,
         .windingOrder = egn::ModelLoaderOptions::WindingOrder::CCW,
         .smoothNormalAngle = static_cast<float>(smoothPaths.contains(std::string(path)) ? 35 : 0),
     };

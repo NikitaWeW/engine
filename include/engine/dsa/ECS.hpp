@@ -198,6 +198,8 @@ public:
 
     template <typename component_t, class... Args> component_t &try_emplace(Args &&...args);
 
+    template <typename component_t> void try_erase();
+
     /// @copydoc ecs::registry::contains
     template <typename component_t> bool contains() const;
 
@@ -501,39 +503,44 @@ inline constexpr egn::Entity::Entity(Registry *reg, ecs::entity e): mReg(reg), m
     mVersion = this->reg()->version(mEntity);
 }
 template <typename component_t, class... Args> inline component_t &egn::Entity::emplace(Args &&...args) {
-    assert(pReg());
+    ECS_ASSERT(valid(), "Invalid entity!");
     return reg()->emplace<component_t, Args...>(id(), std::forward<Args>(args)...);
 }
 template <typename component_t, class... Args> inline component_t &egn::Entity::try_emplace(Args &&...args) {
-    assert(pReg());
+    ECS_ASSERT(valid(), "Invalid entity!");
     if(!contains<component_t>())
         return emplace<component_t>(std::forward<Args>(args)...);
     else
         return get<component_t>();
 }
+template <typename component_t> inline void egn::Entity::try_erase() {
+    ECS_ASSERT(valid(), "Invalid entity!");
+    if(contains<component_t>())
+        erase<component_t>();
+}
 template <typename component_t> inline bool egn::Entity::contains() const {
-    assert(pReg());
+    ECS_ASSERT(valid(), "Invalid entity!");
     return reg()->contains<component_t>(id());
 }
 template <typename component_t> inline component_t const &egn::Entity::get() const {
-    assert(pReg());
+    ECS_ASSERT(valid(), "Invalid entity!");
     return reg()->get<component_t>(id());
 }
 template <typename component_t> inline component_t &egn::Entity::get() {
-    assert(pReg());
+    ECS_ASSERT(valid(), "Invalid entity!");
     return reg()->get<component_t>(id());
 }
 template <typename component_t> inline void egn::Entity::erase() {
-    assert(pReg());
+    ECS_ASSERT(valid(), "Invalid entity!");
     return reg()->erase<component_t>(id());
 }
 inline void egn::Entity::destroy() {
-    assert(pReg());
+    ECS_ASSERT(valid(), "Invalid entity!");
     reg().destroy(*this);
     mEntity = 0;
 };
 inline std::size_t egn::Entity::size() const {
-    assert(pReg());
+    ECS_ASSERT(valid(), "Invalid entity!");
     return reg()->size(id());
 }
 inline bool egn::Entity::empty() const {

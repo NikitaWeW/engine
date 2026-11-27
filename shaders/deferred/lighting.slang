@@ -37,8 +37,7 @@ float4 fsMain(VsOut in, uniform PushConstants pushConstants) {
     float3 diffuse = float3(max(dot(normal, L), 0.0025));
     float3 specular = float3(pow(max(dot(R, V), 0.0), 16.0) * 0.75) * 0;
     float4 oColor = float4(diffuse * albedo.rgb + specular, 1.0);
-    // oColor.rgb = normal /* *.5+.5 */;
-    // oColor.rgb = normal ;
+    // oColor.rgb = normal *.5+.5;
     // oColor = {1, 1, 1, 1};
 
     // Tone mapping

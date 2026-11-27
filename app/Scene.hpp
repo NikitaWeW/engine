@@ -1,9 +1,7 @@
 #pragma once
 #include "Controller.hpp"
 #include "engine/dsa/ECS.hpp"
-#include "engine/renderer/IRenderer.hpp"
-#include "engine/renderer/RenderGraph.hpp"
-#include "engine/renderer/ResourceManager.hpp"
+#include "engine/renderer/EngineRenderer.hpp"
 
 namespace scene {
 
@@ -23,10 +21,11 @@ protected:
     Controller mController;
     egn::Entity mEventListener;
     egn::Entity mCamera;
-    std::unique_ptr<egn::IRenderer> mRenderer;
+    std::unique_ptr<egn::EngineRenderer> mRenderer;
     egn::vk::Device mDevice;
 
     float mRuntime = 0.0f;
+    void addCustomGraphics();
 
     void updateHotkeys(egn::Registry &reg);
     void cycleAnimations(egn::Registry &reg);
