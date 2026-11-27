@@ -2,7 +2,7 @@
 #include <signal.h>
 
 #include "engine/renderer/ResourceManager.hpp"
-#include "engine/scene/Animation.hpp"
+#include "engine/scene/Scene.hpp"
 #include "engine/dsa/ECS.hpp"
 #include "cpptrace/from_current.hpp"
 #include "engine/scene/Loaders.hpp"
@@ -12,7 +12,7 @@
 #include "engine/renderer/Renderdoc.hpp"
 #include "engine/renderer/RenderGraphRenderer.hpp"
 #include "engine/renderer/RenderGraph.hpp"
-#include "engine/scene/Resources.hpp"
+#include "engine/scene/Scene.hpp"
 
 #include "tracy/Tracy.hpp"
 

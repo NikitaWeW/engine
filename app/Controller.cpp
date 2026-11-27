@@ -1,7 +1,7 @@
 #include "Controller.hpp"
 #include "engine/io/Logging.hpp"
 #include "engine/io/Window.hpp"
-#include "engine/scene/Camera.hpp"
+#include "engine/scene/Scene.hpp"
 
 egn::Entity Controller::createCamera(egn::RestrictedEntity<egn::Window> window, glm::vec3 pos, glm::vec3 target) {
     auto e = window.reg().create();
@@ -15,7 +15,7 @@ egn::Entity Controller::createCamera(egn::RestrictedEntity<egn::Window> window, 
         // .pitchYaw = glm::vec2(glm::degrees(glm::pitch(q)), glm::degrees(glm::yaw(q)))
         .orientation = q,
     };
-    e.emplace<egn::Camera>();
+    e.emplace<egn::Camera3D>();
     e.emplace<egn::WindowEventListener>() = {
         .window = window
     };
@@ -30,7 +30,7 @@ static void updateOrientation(glm::vec2 offset, glm::quat &q) {
 
 void Controller::update(egn::Registry &reg, float dt) {
     for(egn::Entity eCamera : reg.view<Controller::Camera, egn::WindowEventListener>()) {
-        auto &engineCamera = eCamera.get<egn::Camera>();
+        auto &engineCamera = eCamera.get<egn::Camera3D>();
         auto &cameraPosition = eCamera.get<PositionedCamera>();
         auto &camera = eCamera.get<Controller::Camera>();
         auto &listener = eCamera.get<egn::WindowEventListener>();
@@ -118,8 +118,8 @@ void Controller::update(egn::Registry &reg, float dt) {
 }
 
 void PositionedCamera::update(egn::Registry &reg) {
-    for(auto e : reg.view<PositionedCamera, egn::Camera>()) {
-        auto &camera = e.get<egn::Camera>();
+    for(auto e : reg.view<PositionedCamera, egn::Camera3D>()) {
+        auto &camera = e.get<egn::Camera3D>();
         auto &pos = e.get<PositionedCamera>();
 
         camera.projMat = glm::perspective<float>(glm::radians(pos.fov), pos.ratio, pos.znear, pos.zfar);

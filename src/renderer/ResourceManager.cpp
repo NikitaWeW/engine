@@ -1,47 +1,103 @@
 #include "engine/renderer/ResourceManager.hpp"
+#include "engine/renderer/EngineRenderer.hpp"
 
 using namespace egn;
 
-template <typename T> static VkFormat getBitmapFormat(Bitmap<T> const &bmp, bool srgb) {
-    if constexpr(std::is_same_v<T, uint8_t>) {
-        switch(bmp.numComponents) {
-            case 1: return srgb ? VK_FORMAT_R8_SRGB : VK_FORMAT_R8_UNORM;
-            case 2: return srgb ? VK_FORMAT_R8G8_SRGB : VK_FORMAT_R8G8_UNORM;
-            case 3: return srgb ? VK_FORMAT_R8G8B8_SRGB : VK_FORMAT_R8G8B8_UNORM;
-            case 4: return srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
-        }
-    } else if constexpr(std::is_same_v<T, uint16_t>) {
-        switch(bmp.numComponents) {
-            case 1: return VK_FORMAT_R16_UNORM;
-            case 2: return VK_FORMAT_R16G16_UNORM;
-            case 3: return VK_FORMAT_R16G16B16_UNORM;
-            case 4: return VK_FORMAT_R16G16B16A16_UNORM;
-        }
-    } else if constexpr(std::is_same_v<T, uint32_t>) {
-        switch(bmp.numComponents) {
-            case 1: return VK_FORMAT_R32_UINT;
-            case 2: return VK_FORMAT_R32G32_UINT;
-            case 3: return VK_FORMAT_R32G32B32_UINT;
-            case 4: return VK_FORMAT_R32G32B32A32_UINT;
-        }
-    } else if constexpr(std::is_same_v<T, float>) {
-        switch(bmp.numComponents) {
-            case 1: return VK_FORMAT_R32_SFLOAT;
-            case 2: return VK_FORMAT_R32G32_SFLOAT;
-            case 3: return VK_FORMAT_R32G32B32_SFLOAT;
-            case 4: return VK_FORMAT_R32G32B32A32_SFLOAT;
-        }
-    } else if constexpr(std::is_same_v<T, double>) {
-        switch(bmp.numComponents) {
-            case 1: return VK_FORMAT_R64_SFLOAT;
-            case 2: return VK_FORMAT_R64G64_SFLOAT;
-            case 3: return VK_FORMAT_R64G64B64_SFLOAT;
-            case 4: return VK_FORMAT_R64G64B64A64_SFLOAT;
-        }
-    }
+constexpr VkFormat egn::toVkFormat(ImageFormat const &format) noexcept {
+    using Type = ImageFormat::Type;
+    using Swiz = ImageFormat::ComponentSwizzle;
 
-    LOG_ERROR("Unsupported Bitmap format");
-    return VK_FORMAT_UNDEFINED;
+    constexpr auto packKey = [](unsigned r, unsigned g, unsigned b, unsigned a, Type t) constexpr -> uint64_t {
+        return (static_cast<uint64_t>(r & 0xFF) << 32) |
+               (static_cast<uint64_t>(g & 0xFF) << 24) |
+               (static_cast<uint64_t>(b & 0xFF) << 16) |
+               (static_cast<uint64_t>(a & 0xFF) << 8)  |
+               static_cast<uint64_t>(t);
+    };
+
+    const bool isBgraSwizzle =
+        format.swizzle.r == Swiz::B &&
+        (format.swizzle.g == Swiz::G || format.swizzle.g == Swiz::IDENTITY) &&
+        format.swizzle.b == Swiz::R &&
+        (format.swizzle.a == Swiz::A || format.swizzle.a == Swiz::IDENTITY);
+
+    const uint64_t key = packKey(format.packing.r, format.packing.g, format.packing.b, format.packing.a, format.type);
+
+    switch (key) {
+        case packKey(8, 0, 0, 0, Type::UNORM): return VK_FORMAT_R8_UNORM;
+        case packKey(8, 0, 0, 0, Type::SNORM): return VK_FORMAT_R8_SNORM;
+        case packKey(8, 0, 0, 0, Type::UINT):  return VK_FORMAT_R8_UINT;
+        case packKey(8, 0, 0, 0, Type::SINT):  return VK_FORMAT_R8_SINT;
+        case packKey(8, 0, 0, 0, Type::SRGB):  return VK_FORMAT_R8_SRGB;
+
+        case packKey(8, 8, 0, 0, Type::UNORM): return VK_FORMAT_R8G8_UNORM;
+        case packKey(8, 8, 0, 0, Type::SNORM): return VK_FORMAT_R8G8_SNORM;
+        case packKey(8, 8, 0, 0, Type::UINT):  return VK_FORMAT_R8G8_UINT;
+        case packKey(8, 8, 0, 0, Type::SINT):  return VK_FORMAT_R8G8_SINT;
+        case packKey(8, 8, 0, 0, Type::SRGB):  return VK_FORMAT_R8G8_SRGB;
+
+        case packKey(8, 8, 8, 0, Type::UNORM): return isBgraSwizzle ? VK_FORMAT_B8G8R8_UNORM : VK_FORMAT_R8G8B8_UNORM;
+        case packKey(8, 8, 8, 0, Type::SNORM): return isBgraSwizzle ? VK_FORMAT_B8G8R8_SNORM : VK_FORMAT_R8G8B8_SNORM;
+        case packKey(8, 8, 8, 0, Type::UINT):  return isBgraSwizzle ? VK_FORMAT_B8G8R8_UINT  : VK_FORMAT_R8G8B8_UINT;
+        case packKey(8, 8, 8, 0, Type::SINT):  return isBgraSwizzle ? VK_FORMAT_B8G8R8_SINT  : VK_FORMAT_R8G8B8_SINT;
+        case packKey(8, 8, 8, 0, Type::SRGB):  return isBgraSwizzle ? VK_FORMAT_B8G8R8_SRGB  : VK_FORMAT_R8G8B8_SRGB;
+
+        case packKey(8, 8, 8, 8, Type::UNORM): return isBgraSwizzle ? VK_FORMAT_B8G8R8A8_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+        case packKey(8, 8, 8, 8, Type::SNORM): return isBgraSwizzle ? VK_FORMAT_B8G8R8A8_SNORM : VK_FORMAT_R8G8B8A8_SNORM;
+        case packKey(8, 8, 8, 8, Type::UINT):  return isBgraSwizzle ? VK_FORMAT_B8G8R8A8_UINT  : VK_FORMAT_R8G8B8A8_UINT;
+        case packKey(8, 8, 8, 8, Type::SINT):  return isBgraSwizzle ? VK_FORMAT_B8G8R8A8_SINT  : VK_FORMAT_R8G8B8A8_SINT;
+        case packKey(8, 8, 8, 8, Type::SRGB):  return isBgraSwizzle ? VK_FORMAT_B8G8R8A8_SRGB  : VK_FORMAT_R8G8B8A8_SRGB;
+
+        case packKey(16, 0, 0, 0, Type::UNORM):  return VK_FORMAT_R16_UNORM;
+        case packKey(16, 0, 0, 0, Type::SNORM):  return VK_FORMAT_R16_SNORM;
+        case packKey(16, 0, 0, 0, Type::UINT):   return VK_FORMAT_R16_UINT;
+        case packKey(16, 0, 0, 0, Type::SINT):   return VK_FORMAT_R16_SINT;
+        case packKey(16, 0, 0, 0, Type::SFLOAT): return VK_FORMAT_R16_SFLOAT;
+
+        case packKey(16, 16, 0, 0, Type::UNORM):  return VK_FORMAT_R16G16_UNORM;
+        case packKey(16, 16, 0, 0, Type::SNORM):  return VK_FORMAT_R16G16_SNORM;
+        case packKey(16, 16, 0, 0, Type::UINT):   return VK_FORMAT_R16G16_UINT;
+        case packKey(16, 16, 0, 0, Type::SINT):   return VK_FORMAT_R16G16_SINT;
+        case packKey(16, 16, 0, 0, Type::SFLOAT): return VK_FORMAT_R16G16_SFLOAT;
+
+        case packKey(16, 16, 16, 0, Type::UNORM):  return VK_FORMAT_R16G16B16_UNORM;
+        case packKey(16, 16, 16, 0, Type::SNORM):  return VK_FORMAT_R16G16B16_SNORM;
+        case packKey(16, 16, 16, 0, Type::UINT):   return VK_FORMAT_R16G16B16_UINT;
+        case packKey(16, 16, 16, 0, Type::SINT):   return VK_FORMAT_R16G16B16_SINT;
+        case packKey(16, 16, 16, 0, Type::SFLOAT): return VK_FORMAT_R16G16B16_SFLOAT;
+
+        case packKey(16, 16, 16, 16, Type::UNORM):  return VK_FORMAT_R16G16B16A16_UNORM;
+        case packKey(16, 16, 16, 16, Type::SNORM):  return VK_FORMAT_R16G16B16A16_SNORM;
+        case packKey(16, 16, 16, 16, Type::UINT):   return VK_FORMAT_R16G16B16A16_UINT;
+        case packKey(16, 16, 16, 16, Type::SINT):   return VK_FORMAT_R16G16B16A16_SINT;
+        case packKey(16, 16, 16, 16, Type::SFLOAT): return VK_FORMAT_R16G16B16A16_SFLOAT;
+
+        case packKey(32, 0, 0, 0, Type::UINT):   return VK_FORMAT_R32_UINT;
+        case packKey(32, 0, 0, 0, Type::SINT):   return VK_FORMAT_R32_SINT;
+        case packKey(32, 0, 0, 0, Type::SFLOAT): return VK_FORMAT_R32_SFLOAT;
+
+        case packKey(32, 32, 0, 0, Type::UINT):   return VK_FORMAT_R32G32_UINT;
+        case packKey(32, 32, 0, 0, Type::SINT):   return VK_FORMAT_R32G32_SINT;
+        case packKey(32, 32, 0, 0, Type::SFLOAT): return VK_FORMAT_R32G32_SFLOAT;
+
+        case packKey(32, 32, 32, 0, Type::UINT):   return VK_FORMAT_R32G32B32_UINT;
+        case packKey(32, 32, 32, 0, Type::SINT):   return VK_FORMAT_R32G32B32_SINT;
+        case packKey(32, 32, 32, 0, Type::SFLOAT): return VK_FORMAT_R32G32B32_SFLOAT;
+
+        case packKey(32, 32, 32, 32, Type::UINT):   return VK_FORMAT_R32G32B32A32_UINT;
+        case packKey(32, 32, 32, 32, Type::SINT):   return VK_FORMAT_R32G32B32A32_SINT;
+        case packKey(32, 32, 32, 32, Type::SFLOAT): return VK_FORMAT_R32G32B32A32_SFLOAT;
+
+        case packKey(5, 6, 5, 0, Type::UNORM):     return isBgraSwizzle ? VK_FORMAT_B5G6R5_UNORM_PACK16 : VK_FORMAT_R5G6B5_UNORM_PACK16;
+        case packKey(4, 4, 4, 4, Type::UNORM):     return isBgraSwizzle ? VK_FORMAT_B4G4R4A4_UNORM_PACK16 : VK_FORMAT_R4G4B4A4_UNORM_PACK16;
+        case packKey(10, 10, 10, 2, Type::UNORM):  return isBgraSwizzle ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+        case packKey(10, 10, 10, 2, Type::UINT):   return isBgraSwizzle ? VK_FORMAT_A2B10G10R10_UINT_PACK32  : VK_FORMAT_A2R10G10B10_UINT_PACK32;
+        case packKey(5, 5, 5, 1, Type::UNORM):     return VK_FORMAT_B5G5R5A1_UNORM_PACK16;
+        case packKey(11, 11, 10, 0, Type::UFLOAT): return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+
+        default:
+            return VK_FORMAT_UNDEFINED;
+    }
 }
 static VkFence createFence(VkDevice dev) {
     VkFence fence = nullptr;
@@ -83,21 +139,21 @@ ResourceAllocator::~ResourceAllocator() {
     }
 }
 uint32_t ResourceAllocator::processImage(Entity eImage) {
-    assert(eImage.valid() && (eImage.contains<Texture2D>()) && "Invalid model!");
+    assert(eImage.valid() && (eImage.contains<Texture>()) && "Invalid model!");
     assert(mCommandBuffer && "ResourceAllocator uninitialized! (Make sure to not use the default constructor)");
-    if(!eImage.contains<vk::Image>() && eImage.contains<Texture2D>()) {
-        auto &image = eImage.get<Texture2D>();
+    if(!eImage.contains<vk::Image>() && eImage.contains<Texture>()) {
+        auto &image = eImage.get<Texture>();
 
         // if(image.bitmap.numComponents == 3)
         //     LOG_WARN("Making R32G32B32 texture2D \"{}\". Maybe change it to 32 bits or something...", image.path);
 
         VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         switch(image.addressMode) {
-            case Texture2D::AddressMode::Repeat: addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT; break;
-            case Texture2D::AddressMode::MirroredRepeat: addressMode = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT; break;
-            case Texture2D::AddressMode::ClampToEdge: addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; break;
-            case Texture2D::AddressMode::ClampToBorder: addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER; break;
-            case Texture2D::AddressMode::MirrorClampToEdge: addressMode = VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE; break;
+            case Texture::AddressMode::Repeat: addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT; break;
+            case Texture::AddressMode::MirroredRepeat: addressMode = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT; break;
+            case Texture::AddressMode::ClampToEdge: addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; break;
+            case Texture::AddressMode::ClampToBorder: addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER; break;
+            case Texture::AddressMode::MirrorClampToEdge: addressMode = VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE; break;
             default: LOG_WARN("Unknown address mode in {}!", eImage); break;
         }
         vk::ImageCreateInfo ci{
@@ -106,11 +162,13 @@ uint32_t ResourceAllocator::processImage(Entity eImage) {
             .commandBuffer = mCommandBuffer,
             .image = {
                 .imageType = VK_IMAGE_TYPE_2D,
-                .format = getBitmapFormat(image.bitmap, image.srgb),
+                .format = toVkFormat(image.image.format),
                 .dimensions = {
-                    .width = image.bitmap.size.x,
-                    .height = image.bitmap.size.y,
-                    .mipLevels = image.numMipLevels
+                    .width = image.image.dimensions.width,
+                    .height = image.image.dimensions.height,
+                    .depth = image.image.dimensions.depth,
+                    .mipLevels = image.numMipLevels,
+                    .arrayLayers = image.image.dimensions.arrayLayers,
                 },
                 .sampler = {
                     .magFilter = image.linearSampling ? VK_FILTER_LINEAR : VK_FILTER_NEAREST,
@@ -126,7 +184,7 @@ uint32_t ResourceAllocator::processImage(Entity eImage) {
                     .viewType = VK_IMAGE_VIEW_TYPE_2D
                 },
             },
-            .data = image.bitmap.pixels.data(),
+            .data = image.image.pixels.data(),
             .name = image.path
         };
         eImage.emplace<vk::Image>(vk::makeImage(ci));

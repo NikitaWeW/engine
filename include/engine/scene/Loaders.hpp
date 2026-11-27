@@ -1,6 +1,6 @@
 #pragma once
 #include "engine/dsa/ECS.hpp"
-#include "Resources.hpp"
+#include "Scene.hpp"
 
 namespace egn {
 

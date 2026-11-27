@@ -4,7 +4,7 @@
 #include <fstream>
 #include <filesystem>
 #include "engine/scene/Loaders.hpp"
-#include "engine/scene/Resources.hpp"
+#include "engine/scene/Scene.hpp"
 
 namespace scene {
 
@@ -25,16 +25,29 @@ inline std::unordered_set<std::string> getSmoothShadedModelPaths() {
     LOG_TRACE("Smoothly shading {}", res);
     return res;
 }
+inline std::string printFormat(egn::ImageFormat const &format) {
+    std::string type = "";
+    switch(format.type) {
+        case egn::ImageFormat::Type::SFLOAT: type = "SFLOAT"; break;
+        case egn::ImageFormat::Type::UFLOAT: type = "UFLOAT"; break;
+        case egn::ImageFormat::Type::SINT: type = "SINT"; break;
+        case egn::ImageFormat::Type::UINT: type = "UINT"; break;
+        case egn::ImageFormat::Type::SNORM: type = "SNORM"; break;
+        case egn::ImageFormat::Type::UNORM: type = "UNORM"; break;
+        case egn::ImageFormat::Type::SRGB: type = "SRGB"; break;
+    };
+    return fmt::format("R{}G{}B{}A{}_{}", format.packing.r, format.packing.g, format.packing.b, format.packing.a, type);
+}
 inline std::string printTexture(egn::Entity e) {
-    if(!e.valid() || !e.contains<egn::Texture2D>())
+    if(!e.valid() || !e.contains<egn::Texture>())
         return fmt::format("{}", e);
-    auto const &texture2D = e.get<egn::Texture2D>();
+    auto const &texture2D = e.get<egn::Texture>();
     return fmt::format("{}, \"{:<30} {}x{}, {:>3} {} mips",
         e,
         texture2D.path + "\",",
-        texture2D.bitmap.size.x,
-        texture2D.bitmap.size.y,
-        (texture2D.srgb ? "srgb" : "not srgb"),
+        texture2D.image.dimensions.width,
+        texture2D.image.dimensions.height,
+        printFormat(texture2D.image.format),
         texture2D.numMipLevels);
 }
 [[maybe_unused]] [[nodiscard]] inline std::string printModelData(egn::Entity e) {

@@ -1,6 +1,5 @@
 #include "engine/renderer/EngineRenderer.hpp"
-#include "engine/scene/Animation.hpp"
-#include "engine/scene/Camera.hpp"
+#include "engine/scene/Scene.hpp"
 #include "engine/renderer/ResourceManager.hpp"
 
 constexpr bool ENABLE_BONE_DEBUG = false;
@@ -69,7 +68,7 @@ static VkCommandPool makeCommandPool(uint32_t index, VkDevice device) {
     return commandPool;
 }
 static glm::mat4 getTransform(Entity e) {
-    return e.contains<egn::Transform>() ? e.get<egn::Transform>().getMat() : glm::mat4{ 1.0f };
+    return e.contains<egn::Transform3D>() ? e.get<egn::Transform3D>().getMat() : glm::mat4{ 1.0f };
 }
 
 static void setupGBufferPass(egn::rg::RenderPassBuilder &builder, void *pRenderer) {
@@ -323,8 +322,8 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
     std::map<std::pair<egn::Entity, uint>, std::vector<ModelData>> instanceData;
 
     UniformBuffer uBufferData{
-        .projMat = renderer.camera().get<Camera>().projMat,
-        .viewMat = renderer.camera().get<Camera>().viewMat,
+        .projMat = renderer.camera().get<Camera3D>().projMat,
+        .viewMat = renderer.camera().get<Camera3D>().viewMat,
     };
     VkDeviceAddress uniformBufferAddress = pushUniform(renderer.uniformBuffer(), uBufferData, renderer.frameIndex(), 16);
 
@@ -553,8 +552,8 @@ static void runLightingPass(lighting_data &passData, VkCommandBuffer cb, void *p
         glm::mat4 projMat;
         glm::mat4 viewMat;
     } pushConstants{
-        .projMat = glm::inverse(renderer.camera().get<Camera>().projMat),
-        .viewMat = glm::inverse(renderer.camera().get<Camera>().viewMat),
+        .projMat = glm::inverse(renderer.camera().get<Camera3D>().projMat),
+        .viewMat = glm::inverse(renderer.camera().get<Camera3D>().viewMat),
     };
 
     vkCmdPushConstants(cb,
@@ -620,7 +619,7 @@ static void runBlitPass(swapchain_blit_data &passData, VkCommandBuffer cb, void 
 
 static void updateResourceAllocator(EngineRendererImpl &renderer, Registry &reg) {
     renderer.resourceAllocator.begin();
-    for(auto eTexture : reg.view<egn::Texture2D>(egn::exclude<vk::Image>{ })) {
+    for(auto eTexture : reg.view<egn::Texture>(egn::exclude<vk::Image>{ })) {
         renderer.resourceAllocator.processImage(eTexture);
     }
     for(auto eTexture : reg.view<egn::Model>(egn::exclude<egn::VulkanModel>{ })) {
@@ -699,7 +698,7 @@ egn::EngineRenderer::~EngineRenderer() {
     }
 }
 
-void egn::EngineRenderer::setCamera(RestrictedEntity<Camera> camera) {
+void egn::EngineRenderer::setCamera(RestrictedEntity<Camera3D> camera) {
     mImpl->passData.mCamera = camera;
 }
 

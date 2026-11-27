@@ -1,4 +1,4 @@
-#include "engine/scene/Animation.hpp"
+#include "engine/scene/Scene.hpp"
 #include "engine/io/Logging.hpp"
 
 #include <algorithm>

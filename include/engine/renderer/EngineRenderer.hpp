@@ -1,7 +1,7 @@
 #pragma once
 #include "engine/renderer/RenderGraphRenderer.hpp"
 #include "engine/renderer/ResourceManager.hpp"
-#include "engine/scene/Camera.hpp"
+#include "engine/scene/Scene.hpp"
 
 namespace egn {
 
@@ -17,7 +17,7 @@ public:
     EngineRenderer(EngineRenderer const &) = delete;
     EngineRenderer &operator=(EngineRenderer const &) = delete;
 
-    void setCamera(RestrictedEntity<Camera> camera);
+    void setCamera(RestrictedEntity<Camera3D> camera);
     void preFrame(RestrictedEntity<vk::Image> target, uint frameIndex);
     void render(CommandBuffers &commandBuffers);
 };
@@ -212,5 +212,7 @@ inline void injectPass(rg::RenderPassBuilder &builder, std::string const &src, s
     builder.attachResourceWrite({dst, traits});
     builder->addAliasResource(src, dst);
 }
+
+constexpr VkFormat toVkFormat(ImageFormat const &format) noexcept;
 
 };

@@ -124,9 +124,9 @@ void scene::TestScene::addCustomGraphics() {
                 glm::mat4 viewMat;
                 glm::vec3 cameraPosition;
             } pushConstants{
-                .projMat = renderer.camera().get<egn::Camera>().projMat,
-                .viewMat = renderer.camera().get<egn::Camera>().viewMat,
-                .cameraPosition = glm::inverse(renderer.camera().get<egn::Camera>().viewMat)[3],
+                .projMat = renderer.camera().get<egn::Camera3D>().projMat,
+                .viewMat = renderer.camera().get<egn::Camera3D>().viewMat,
+                .cameraPosition = glm::inverse(renderer.camera().get<egn::Camera3D>().viewMat)[3],
             };
             pushConstants.projMat[1][1] *= -1;
 

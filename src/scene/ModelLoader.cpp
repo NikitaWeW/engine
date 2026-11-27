@@ -1,5 +1,5 @@
 #include "engine/scene/Loaders.hpp"
-#include "engine/scene/Resources.hpp"
+#include "engine/scene/Scene.hpp"
 
 #include <cstddef>
 #include <filesystem>
@@ -422,8 +422,8 @@ ModelLoaderImpl::ModelLoaderImpl(ecs::registry &reg) {
     ecs::entity black = 0;
     ecs::entity tile = 0;
 
-    for(ecs::entity e_texture : mRegistry->view<Texture2D>()) {
-        auto &texture = mRegistry->get<Texture2D>(e_texture);
+    for(ecs::entity e_texture : mRegistry->view<Texture>()) {
+        auto &texture = mRegistry->get<Texture>(e_texture);
 
         if(texture.path == "default/white")
             white = e_texture;
@@ -435,61 +435,54 @@ ModelLoaderImpl::ModelLoaderImpl(ecs::registry &reg) {
             tile = e_texture;
     }
 
-    if(!white)
+    if(!white) {
         white = mRegistry->create(Texture{
-            .bitmap =
-                Bitmap<unsigned char>{
-                    .pixels = { 255, 255, 255 },
-                    .numComponents = 3,
-                    .size = { 1, 1 },
-                },
+            .image ={
+                .pixels = { 255, 255, 255 },
+                .format = IMAGE_FORMAT_R8G8B8_UNORM,
+                .dimensions = { 1, 1 },
+            },
             .path = "default/white",
-            .srgb = false,
         });
+    }
     if(!normal)
         normal = mRegistry->create(Texture{
-            .bitmap =
-                Bitmap<unsigned char>{
-                    .pixels = { 128, 128, 255 },
-                    .numComponents = 3,
-                    .size = { 1, 1 },
-                },
+            .image = {
+                .pixels = { 128, 128, 255 },
+                .format = IMAGE_FORMAT_R8G8B8_UNORM,
+                .dimensions = { 1, 1 },
+            },
             .path = "default/normal",
-            .srgb = false,
         });
     if(!black)
         black = mRegistry->create(Texture{
-            .bitmap =
-                Bitmap<unsigned char>{
-                    .pixels = { 0, 0, 0 },
-                    .numComponents = 3,
-                    .size = { 1, 1 },
-                },
+            .image = {
+                .pixels = { 0, 0, 0 },
+                .format = IMAGE_FORMAT_R8G8B8_UNORM,
+                .dimensions = { 1, 1 },
+            },
             .path = "default/black",
-            .srgb = false,
         });
     if(!tile)
         tile = mRegistry ->create(Texture{
-            .bitmap = Bitmap<unsigned char>{
+            .image = {
                 .pixels = { 
-                        // clang-format off
-                        255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 
-                        128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 
-                        255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 
-                        128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 
-                        255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 
-                        128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 
-                        255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 
-                        128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255 
-                        // clang-format on
-                    },
-                    .numComponents = 3,
-                    .size = { 8, 8 },
+                    // clang-format off
+                    255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 
+                    128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 
+                    255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 
+                    128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 
+                    255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 
+                    128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 
+                    255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 
+                    128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255, 128, 128, 128, 255, 255, 255 
+                    // clang-format on
                 },
-                .path = "default/tile",
-                .srgb = true,
-            }
-        );
+                .format = IMAGE_FORMAT_R8G8B8_UNORM,
+                .dimensions = { 8, 8 },
+            },
+            .path = "default/tile",
+        });
 
     mDefaultMaterial = {
         .textures = {
@@ -535,14 +528,20 @@ ecs::entity ModelLoaderImpl::fromRawAssimpTexture(aiTexture const *texture) {
         return INVALID_ENTITY;
     }
 
-    Texture2D result;
-    result.bitmap = Bitmap<unsigned char>{ .numComponents = 4, .size = { width, height } };
+    Texture result;
+    result.image = Image{
+        .format = IMAGE_FORMAT_R8G8B8A8_UNORM,
+        .dimensions = {
+            .width = texture->mWidth,
+            .height = texture->mWidth,
+        },
+    };
     // result.path = "raw resource " + stringID() + " aiTexture " + texture->mFilename.C_Str();
 
     for(size_t i = 0; i < width * height; ++i) {
         aiTexel const &texel = texture->pcData[i];
-        glm::uvec2 pixel{ static_cast<unsigned>(i % width), static_cast<unsigned>(i / width) };
-        *reinterpret_cast<glm::vec<4, unsigned char> *>(&result.bitmap.pixels[result.bitmap.offsetOf(pixel)]) = { /* u8ToFloat */ (texel.r),
+        auto pos = result.image.offsetOf({static_cast<unsigned>(i % width), static_cast<unsigned>(i / width)});
+        *reinterpret_cast<glm::vec<4, unsigned char> *>(&result.image.pixels[pos]) = { /* u8ToFloat */ (texel.r),
             /* u8ToFloat */ (texel.g),
             /* u8ToFloat */ (texel.b),
             /* u8ToFloat */ (texel.a) };
@@ -561,14 +560,13 @@ void ModelLoaderImpl::loadMaterialTexture(aiMaterial const *material, aiTextureT
     aiString str;
     if(material->GetTexture(type, 0, &str) != AI_SUCCESS)
         return;
-    bool srgb = type == aiTextureType_DIFFUSE;
 
     aiTexture const *embedded = mScene->GetEmbeddedTexture(str.C_Str());
     if(embedded) {
         if(embedded->mHeight == 0) {
             MODEL_LOADER_TRACE("Loading embedded compressed texture \"{}\"", embedded->mFilename.C_Str());
             out = mTextureLoader.loadFromMemory(embedded->pcData, embedded->mWidth, mOptions.textureOptions);
-            mRegistry->get<Texture2D>(out).path = embedded->mFilename.C_Str();
+            mRegistry->get<Texture>(out).path = embedded->mFilename.C_Str();
         } else {
             MODEL_LOADER_TRACE("Loading embedded raw texture \"{}\"", embedded->mFilename.C_Str());
             out = fromRawAssimpTexture(embedded);
@@ -580,9 +578,8 @@ void ModelLoaderImpl::loadMaterialTexture(aiMaterial const *material, aiTextureT
         out = mTextureLoader.loadFromFile(filepath, mOptions.textureOptions);
     }
 
-    if(out) {
-        auto &tex = mRegistry->get<Texture2D>(out);
-        tex.srgb = srgb;
+    if(out && type == aiTextureType_DIFFUSE) {
+        mRegistry->get<Texture>(out).image.format.type = ImageFormat::Type::SRGB;
     }
 }
 Material ModelLoaderImpl::convertMaterial(aiMaterial const *aimaterial, Material::Properties const &defaultProperties) {
@@ -735,7 +732,7 @@ ecs::entity ModelLoaderImpl::processLight([[maybe_unused]] aiLight const *light)
     //         PointLight{
     //             .color = toVec3(light->mColorDiffuse) * (1.0f / (light->mAttenuationQuadratic))
     //         },
-    //         Transform{
+    //         Transform3D{
     //             .position = toVec3(light->mPosition)
     //         }
     //     );
@@ -744,7 +741,7 @@ ecs::entity ModelLoaderImpl::processLight([[maybe_unused]] aiLight const *light)
     //         DirectionalLight{
     //             .color = toVec3(light->mColorDiffuse) * (1.0f / (light->mAttenuationQuadratic))
     //         },
-    //         Transform{
+    //         Transform3D{
     //             .orientation = glm::quatLookAt(glm::normalize(toVec3(light->mDirection)), glm::normalize(toVec3(light->mUp)))
     //             // .orientation = glm::quatLookAt(toVec3(light->mDirection), glm::abs(glm::dot(toVec3(light->mDirection), glm::vec3{0, 1, 0})) > 0.999 ? glm::vec3{1, 0, 0} : glm::vec3{0, 1, 0})
     //         }
@@ -756,7 +753,7 @@ ecs::entity ModelLoaderImpl::processLight([[maybe_unused]] aiLight const *light)
     //             .innerConeAngle = glm::degrees(light->mAngleInnerCone),
     //             .outerConeAngle = glm::degrees(light->mAngleOuterCone)
     //         },
-    //         Transform{
+    //         Transform3D{
     //             .position = toVec3(light->mPosition),
     //             .orientation = glm::quatLookAt(glm::normalize(toVec3(light->mDirection)), glm::normalize(toVec3(light->mUp)))
     //         }
@@ -767,7 +764,7 @@ ecs::entity ModelLoaderImpl::processLight([[maybe_unused]] aiLight const *light)
     //             .color = toVec3(light->mColorDiffuse) * (1.0f / (light->mAttenuationQuadratic)),
     //             .size = toVec2(light->mSize)
     //         },
-    //         Transform{
+    //         Transform3D{
     //             .position = toVec3(light->mPosition),
     //             .orientation = glm::quatLookAt(glm::normalize(toVec3(light->mDirection)), glm::normalize(toVec3(light->mUp)))
     //         }

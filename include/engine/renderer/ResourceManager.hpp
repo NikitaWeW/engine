@@ -1,7 +1,7 @@
 // Renderer logic, not the render graph
 
 #pragma once
-#include "engine/scene/Resources.hpp"
+#include "engine/scene/Scene.hpp"
 #include "engine/scene/Loaders.hpp"
 #include "engine/vk/vk.hpp"
 

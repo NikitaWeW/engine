@@ -4,19 +4,18 @@
 
 #include "engine/renderer/EngineRenderer.hpp"
 #include "engine/renderer/ResourceManager.hpp"
-#include "engine/scene/Animation.hpp"
-#include "engine/scene/Resources.hpp"
+#include "engine/scene/Scene.hpp"
 
 #include <random>
 
 struct CycleAnimations { };
 
-static egn::Transform lookat(glm::vec3 pos, glm::vec3 center) {
+static egn::Transform3D lookat(glm::vec3 pos, glm::vec3 center) {
     auto dir = glm::normalize(center - pos);
     auto up = glm::abs(glm::dot(dir, { 0, 1, 0 })) > 0.999 ? glm::vec3{ 1, 0, 0 } : glm::vec3{ 0, 1, 0 };
     return { .position = pos, .orientation = glm::normalize(glm::quatLookAt(dir, up)) };
 }
-static egn::Transform lookdir(glm::vec3 pos, glm::vec3 dir) {
+static egn::Transform3D lookdir(glm::vec3 pos, glm::vec3 dir) {
     auto up = glm::abs(glm::dot(dir, { 0, 1, 0 })) > 0.999 ? glm::vec3{ 1, 0, 0 } : glm::vec3{ 0, 1, 0 };
     return { .position = pos, .orientation = glm::normalize(glm::quatLookAt(dir, up)) };
 }
@@ -65,16 +64,16 @@ void scene::TestScene::setup(egn::Registry &reg) {
     const glm::vec3 startPos(0, -4, 0);
     const glm::vec3 step(2, 0, 0);
     for(uint i = 0; i < props.size(); ++i) {
-        reg.create(egn::ModelInstance{ props[i] }, egn::Transform{ .position = startPos + static_cast<float>(i) * step });
+        reg.create(egn::ModelInstance{ props[i] }, egn::Transform3D{ .position = startPos + static_cast<float>(i) * step });
     }
 
     const auto cubes = loadModel(reg, "assets/models/deccer_cubes/SM_Deccer_Cubes_Textured_Complex.gltf", { });
     if(cubes) {
-        reg.create(egn::ModelInstance{ cubes }, egn::Transform{ .position = { -10, 0, 10 } });
+        reg.create(egn::ModelInstance{ cubes }, egn::Transform3D{ .position = { -10, 0, 10 } });
     }
 
     auto fox = loadModel(reg, "assets/models/fox.glb");
-    fox.emplace<egn::Transform>() = {
+    fox.emplace<egn::Transform3D>() = {
         .orientation = glm::quatLookAt(glm::vec3(0, 0, 1), glm::vec3(0, 1, 0)),
         .scale = glm::vec3(0.014f),
     };
