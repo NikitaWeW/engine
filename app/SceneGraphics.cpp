@@ -15,23 +15,39 @@ void scene::TestScene::addCustomGraphics() {
         "grid", VK_QUEUE_GRAPHICS_BIT,
         [&](rg::RenderPassBuilder &builder, void *) {
             egn::injectPass(builder, "main_image", "grid_main_image", egn::COLOR_ATTACHMENT_TRAITS);
-            egn::injectPass(builder, "gbuffer_depth", "grid_gbuffer_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS);
+            builder.attachResourceRead({"gbuffer_depth", egn::DEPTH_STENCIL_ATTACHMENT_TRAITS});
         },
         [&](GridPassData &passData, rg::RenderGraph const &result, void *pRenderer) {
             egn::PassData &renderer = *static_cast<egn::PassData *>(pRenderer);
+            passData.depth = result.getResource("gbuffer_depth");
+            passData.out = result.getResource("grid_main_image");
+            assert(passData.depth.valid());
+            assert(passData.out.valid());
             if(!passData.pipeline.valid()) {
                 passData.pipeline = renderer.reg().create();
                 passData.pipeline.name("grid_pipeline");
                 passData.pipeline.emplace<vk::Shader>(egn::makeShader(mDevice.device, "Grid.glsl"));
+                VkFormat format = egn::MAIN_IMAGE_INFO.imageInfo.format;
+                if(passData.out.contains<vk::Image>())
+                    format = passData.out.get<vk::Image>().createInfo.image.format;
+                if(passData.out.contains<vk::ImageCreateInfo>()) 
+                    format = passData.out.get<vk::ImageCreateInfo>().image.format;
                 vk::GraphicsPipelineCreateInfo pipelineCi{
                     .dynamicState = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR },
+                    .input = {
+                        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+                    },
                     .attachments = {
-                        .color = { egn::MAIN_IMAGE_INFO.imageInfo.format },
+                        .color = { format },
                         .depth = renderer.depthFormat(),
                     },
                     .depthStencil = {
                         .depthTestEnable = true,
                         .depthWriteEnable = false,
+                        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+                    },
+                    .rasterization = {
+                        .cullMode = VK_CULL_MODE_NONE,
                     },
                     .blending = {
                         .attachments = {egn::ALPHA_BLENDING},
@@ -40,10 +56,6 @@ void scene::TestScene::addCustomGraphics() {
                 passData.pipeline.emplace<vk::Pipeline>(vk::makePipeline(passData.pipeline.get<vk::Shader>(), { }, pipelineCi));
                 assert(passData.pipeline.get<vk::Pipeline>().valid);
             }
-            passData.depth = result.getResource("grid_gbuffer_depth");
-            passData.out = result.getResource("grid_main_image");
-            assert(passData.depth.valid());
-            assert(passData.out.valid());
         },
         [&](GridPassData &passData, VkCommandBuffer cb, void *pRenderer) {
             egn::PassData &renderer = *static_cast<egn::PassData *>(pRenderer);
@@ -59,7 +71,7 @@ void scene::TestScene::addCustomGraphics() {
                     .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                     .imageView = passData.out.get<vk::Image>().view,
                     .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
                     .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
                     .clearValue{ .color{
                         { 0.0f, 0.0f, 0.0f, 0.0f },
@@ -71,7 +83,7 @@ void scene::TestScene::addCustomGraphics() {
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                 .imageView = passData.depth.get<vk::Image>().view,
                 .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
                 .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
                 .clearValue = { .depthStencil = { 1.0f, 0 } },
             };
@@ -108,13 +120,15 @@ void scene::TestScene::addCustomGraphics() {
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
 
             struct PushConstants {
-                // Inverted
                 glm::mat4 projMat;
                 glm::mat4 viewMat;
+                glm::vec3 cameraPosition;
             } pushConstants{
-                .projMat = glm::inverse(renderer.camera().get<egn::Camera>().projMat),
-                .viewMat = glm::inverse(renderer.camera().get<egn::Camera>().viewMat),
+                .projMat = renderer.camera().get<egn::Camera>().projMat,
+                .viewMat = renderer.camera().get<egn::Camera>().viewMat,
+                .cameraPosition = glm::inverse(renderer.camera().get<egn::Camera>().viewMat)[3],
             };
+            pushConstants.projMat[1][1] *= -1;
 
             vkCmdPushConstants(cb,
                 passData.pipeline.get<vk::Pipeline>().layout.layout,

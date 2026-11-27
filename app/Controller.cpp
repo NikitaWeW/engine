@@ -124,6 +124,7 @@ void PositionedCamera::update(egn::Registry &reg) {
 
         camera.projMat = glm::perspective<float>(glm::radians(pos.fov), pos.ratio, pos.znear, pos.zfar);
         camera.viewMat = glm::mat4_cast(glm::normalize(pos.orientation)) * glm::translate(glm::mat4(1.0f), -pos.position);
+        camera.projMat[1][1] *= -1;
     }
 }
 

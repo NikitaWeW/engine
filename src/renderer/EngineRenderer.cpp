@@ -272,7 +272,7 @@ static void runGBufferPass(gbuffer_data &passData, VkCommandBuffer cb, void *pRe
         .imageView = depth.view,
         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .clearValue = { .depthStencil = { 1.0f, 0 } },
     };
 
@@ -532,9 +532,9 @@ static void runLightingPass(lighting_data &passData, VkCommandBuffer cb, void *p
 
     VkViewport vp{
         .x = 0,
-        .y = static_cast<float>(extent.height),
+        .y = 0,
         .width = static_cast<float>(extent.width),
-        .height = -static_cast<float>(extent.height),
+        .height = static_cast<float>(extent.height),
         .minDepth = 0.0f,
         .maxDepth = 1.0f,
     };

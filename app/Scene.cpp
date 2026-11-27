@@ -164,10 +164,10 @@ void scene::TestScene::cycleAnimations(egn::Registry &reg) {
             });
             float duration = 0.5 * newAnim.durationTicks / newAnim.ticksPerSecond;
 
-            LOG_INFO("Transition from {} to {} in {:.2f}s",
-                eInstance.contains<egn::CurrentAnimation>() ? eInstance.get<egn::CurrentAnimation>().name : "unknown",
-                newAnimation,
-                duration);
+            // LOG_INFO("Transition from {} to {} in {:.2f}s",
+            //     eInstance.contains<egn::CurrentAnimation>() ? eInstance.get<egn::CurrentAnimation>().name : "unknown",
+            //     newAnimation,
+            //     duration);
 
             eInstance.emplace<egn::AnimationTransition>(egn::AnimationTransition{
                 .to = newAnimation,
